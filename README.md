@@ -23,7 +23,7 @@ repeated lines are filtered out.
 
 ## Setup on the tablet
 
-1. Install `CollegeWhispr-1.0.0.apk` (allow "install unknown apps" for your file manager/browser).
+1. Install `CollegeWhispr-1.0.1.apk` (allow "install unknown apps" for your file manager/browser).
 2. Open Instellingen:
    - Paste a free Groq API key from https://console.groq.com/keys and tap *Testen*.
    - Optionally download an offline model over wifi (Large v3 Turbo: 574 MB).
