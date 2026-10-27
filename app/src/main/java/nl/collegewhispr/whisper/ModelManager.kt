@@ -89,6 +89,7 @@ object ModelManager {
         e.apply()
     }
 
+    @Synchronized
     fun download(ctx: Context, m: ModelInfo) {
         val dm = ctx.getSystemService(DownloadManager::class.java)
         val target = file(ctx, m)
@@ -107,7 +108,12 @@ object ModelManager {
         if (target.exists()) target.delete()
     }
 
-    /** Polls DownloadManager; call regularly while the settings screen is open. */
+    /**
+     * Polls DownloadManager and installs finished downloads. Called every second while the settings
+     * screen is open, and on app resume and before transcribing, so a download that finished after
+     * leaving the settings screen is still picked up.
+     */
+    @Synchronized
     fun poll(ctx: Context) {
         loadIds(ctx)
         if (ids.isEmpty()) return
@@ -140,6 +146,7 @@ object ModelManager {
         refresh(ctx)
     }
 
+    @Synchronized
     fun cancel(ctx: Context, m: ModelInfo) {
         loadIds(ctx)
         ids.remove(m.id)?.let { ctx.getSystemService(DownloadManager::class.java).remove(it) }

@@ -227,7 +227,7 @@ fun StatusLine(l: Lecture, chunkInfo: Pair<Int, Int>?) {
         LectureStatus.ERROR, LectureStatus.WAITING -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    val extra = if (l.status == LectureStatus.TRANSCRIBING && chunkInfo != null)
+    val extra = if (l.status == LectureStatus.TRANSCRIBING && chunkInfo != null && chunkInfo.second > 0)
         " (deel ${chunkInfo.first} van ${chunkInfo.second}, ${(l.progress * 100).toInt()}%)" else ""
     Text(l.status.label + extra, color = color, style = MaterialTheme.typography.labelLarge)
     if (l.status == LectureStatus.TRANSCRIBING) {

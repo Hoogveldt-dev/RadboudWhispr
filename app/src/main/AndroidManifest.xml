@@ -20,8 +20,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.CollegeWhispr">
 
+        <!-- Compose redraws on rotation itself; recreating the activity would reset
+             the open screen and cancel a running import. -->
         <activity
             android:name=".ui.MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="true"
             android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize">

@@ -92,9 +92,10 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var playing by remember { mutableStateOf(false) }
     var position by remember { mutableFloatStateOf(0f) }
-    DisposableEffect(id, lecture.hasAudio) {
+    val recording = lecture.status == LectureStatus.RECORDING
+    DisposableEffect(id, lecture.hasAudio, recording) {
         val f = LectureRepository.audio(id)
-        player = if (lecture.hasAudio && f.exists() && lecture.status != LectureStatus.RECORDING) {
+        player = if (lecture.hasAudio && f.exists() && !recording) {
             runCatching { MediaPlayer().apply { setDataSource(f.absolutePath); prepare() } }.getOrNull()
         } else null
         onDispose { player?.release(); player = null; playing = false }
@@ -181,7 +182,7 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         when (lecture.status) {
                             LectureStatus.TRANSCRIBING, LectureStatus.QUEUED ->
-                                OutlinedButton(onClick = { TranscriptionService.cancel(ctx) }) { Text("Stoppen") }
+                                OutlinedButton(onClick = { TranscriptionService.cancel(ctx, id) }) { Text("Stoppen") }
                             LectureStatus.RECORDED, LectureStatus.WAITING, LectureStatus.ERROR ->
                                 if (lecture.hasAudio) Button(onClick = { TranscriptionService.enqueue(ctx, id) }) {
                                     Text(if (lecture.status == LectureStatus.RECORDED) "Transcriberen" else "Opnieuw proberen")
@@ -254,7 +255,9 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
             confirmButton = {
                 TextButton({
                     confirmDelete = false
-                    if (TranscriptionService.state.value.lectureId == id) TranscriptionService.cancel(ctx)
+                    if (lecture.status == LectureStatus.QUEUED || lecture.status == LectureStatus.TRANSCRIBING) {
+                        TranscriptionService.cancel(ctx, id)
+                    }
                     player?.release(); player = null
                     LectureRepository.delete(id)
                     onBack()

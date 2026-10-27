@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -62,6 +63,7 @@ class TranscriptionService : Service() {
         private const val EXTRA_RESET = "reset"
         private const val EXTRA_ENGINE = "engine"
         private const val NOTIF_ID = 2
+        private const val STOPPED = "Gestopt. Tik op Transcriberen om verder te gaan."
 
         private val _state = MutableStateFlow(TranscriptionState())
         val state: StateFlow<TranscriptionState> get() = _state
@@ -80,8 +82,17 @@ class TranscriptionService : Service() {
             }
         }
 
-        fun cancel(ctx: Context) {
-            ctx.startService(Intent(ctx, TranscriptionService::class.java).setAction(ACTION_CANCEL))
+        /** Stops one lecture (removed from the queue, or aborted if it is running), or everything when [id] is null. */
+        fun cancel(ctx: Context, id: String? = null) {
+            // Mark it right away, or the next app start would queue it again.
+            id?.let { markStopped(it) }
+            val i = Intent(ctx, TranscriptionService::class.java).setAction(ACTION_CANCEL)
+            id?.let { i.putExtra(EXTRA_ID, it) }
+            runCatching { ctx.startService(i) }
+        }
+
+        private fun markStopped(id: String) = LectureRepository.update(id) {
+            if (it.status == LectureStatus.QUEUED) it.copy(status = LectureStatus.RECORDED, message = STOPPED) else it
         }
     }
 
@@ -89,7 +100,8 @@ class TranscriptionService : Service() {
     private val queue = ArrayDeque<Pair<String, EngineMode?>>()
     private var worker: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
-    @Volatile private var cancelled = false
+    /** Lecture being transcribed now, and its job (a child of [worker], so it can be stopped alone). */
+    @Volatile private var current: Pair<String, Job>? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -100,15 +112,24 @@ class TranscriptionService : Service() {
                 val id = intent.getStringExtra(EXTRA_ID) ?: return START_NOT_STICKY
                 val eng = intent.getStringExtra(EXTRA_ENGINE)?.let { runCatching { EngineMode.valueOf(it) }.getOrNull() }
                 synchronized(queue) {
-                    if (queue.none { it.first == id } && _state.value.lectureId != id) queue.addLast(id to eng)
+                    if (queue.none { it.first == id } && current?.first != id) queue.addLast(id to eng)
                 }
                 startWorker()
             }
             ACTION_CANCEL -> {
-                cancelled = true
-                synchronized(queue) { queue.clear() }
-                runCatching { WhisperLib.requestAbort() }
-                worker?.cancel()
+                val id = intent.getStringExtra(EXTRA_ID)
+                val removed = synchronized(queue) {
+                    queue.filter { id == null || it.first == id }.also { r -> queue.removeAll(r) }
+                }
+                removed.forEach { markStopped(it.first) }
+                val running = current
+                if (id == null) {
+                    runCatching { WhisperLib.requestAbort() }
+                    worker?.cancel()
+                } else if (running?.first == id) {
+                    runCatching { WhisperLib.requestAbort() }
+                    running.second.cancel()
+                }
                 if (worker?.isActive != true) stopSelf()
             }
             else -> if (worker?.isActive != true) stopSelf()
@@ -148,7 +169,6 @@ class TranscriptionService : Service() {
 
     private fun startWorker() {
         if (worker?.isActive == true) return
-        cancelled = false
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CollegeWhispr:tx").apply { acquire(4 * 3600_000L) }
         worker = scope.launch {
@@ -156,22 +176,30 @@ class TranscriptionService : Service() {
             try {
                 while (true) {
                     val next = synchronized(queue) { queue.removeFirstOrNull() } ?: break
-                    if (local == null) local = LocalEngine(this@TranscriptionService)
-                    try {
-                        process(next.first, next.second, local)
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        LectureRepository.update(next.first) {
-                            it.copy(status = LectureStatus.RECORDED, message = "Gestopt. Tik op Transcriberen om verder te gaan.")
-                        }
-                        throw e
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Fout bij ${next.first}", e)
-                        LectureRepository.update(next.first) {
-                            it.copy(status = LectureStatus.ERROR, message = e.message ?: e.javaClass.simpleName)
+                    val engine = local ?: LocalEngine(this@TranscriptionService).also { local = it }
+                    _state.value = TranscriptionState(next.first)
+                    // LAZY: [current] must be set before the job can run, so Stoppen always finds it
+                    val job = launch(start = CoroutineStart.LAZY) {
+                        try {
+                            process(next.first, next.second, engine)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            LectureRepository.update(next.first) {
+                                it.copy(status = LectureStatus.RECORDED, message = STOPPED)
+                            }
+                            throw e
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Fout bij ${next.first}", e)
+                            LectureRepository.update(next.first) {
+                                it.copy(status = LectureStatus.ERROR, message = e.message ?: e.javaClass.simpleName)
+                            }
                         }
                     }
+                    current = next.first to job
+                    job.join()
+                    current = null
                 }
             } finally {
+                current = null
                 local?.close()
                 _state.value = TranscriptionState()
                 wakeLock?.let { if (it.isHeld) it.release() }
@@ -189,6 +217,7 @@ class TranscriptionService : Service() {
 
     private suspend fun process(id: String, override: EngineMode?, local: LocalEngine) {
         val lecture = LectureRepository.get(id) ?: return
+        ModelManager.poll(this) // install an offline model whose download finished in the background
         val file = LectureRepository.audio(id)
         if (!file.exists()) error("Het audiobestand ontbreekt")
         val info = Wav.info(file)
@@ -251,7 +280,7 @@ class TranscriptionService : Service() {
                     usedEngine = "Offline (${local.modelLabel()})"
                     progress(0f, usedEngine)
                     result = local.transcribe(samples, settings.language, prompt) { p -> progress(p / 100f, usedEngine) }
-                    if (result == null && cancelled) throw kotlinx.coroutines.CancellationException()
+                    if (result == null) coroutineContextCheck() // aborted by Stoppen
                     if (result == null) reason = "Offline transcriptie mislukt"
                 } else if (reason == null || mode == EngineMode.OFFLINE_ONLY) {
                     reason = "Geen offline model gedownload"
@@ -338,7 +367,6 @@ class TranscriptionService : Service() {
 
     override fun onTimeout(startId: Int, fgsType: Int) {
         // Android 15 limits dataSync services; progress is saved per chunk, so just stop.
-        cancelled = true
         runCatching { WhisperLib.requestAbort() }
         worker?.cancel()
     }

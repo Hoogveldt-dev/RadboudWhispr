@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -172,50 +173,60 @@ class RecordingService : Service() {
         var lastUi = 0L
         var elapsed = 0L
         var isRecording = false
-        RandomAccessFile(file, "rw").use { raf ->
-            raf.setLength(0)
-            raf.write(Wav.header(0))
-            while (running) {
-                if (paused) {
-                    if (isRecording) { rec.stop(); isRecording = false }
-                    Thread.sleep(100)
-                    continue
-                }
-                if (!isRecording) { rec.startRecording(); isRecording = true }
-                val n = rec.read(buf, 0, buf.size)
-                if (n <= 0) { Thread.sleep(20); continue }
-                val samples = if (decimator != null) decimator.process(buf, n) else buf.copyOf(n)
-                val bb = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-                bb.asShortBuffer().put(samples)
-                raf.write(bb.array())
-                written += samples.size * 2
-                elapsed = written * 1000 / (SAMPLE_RATE * 2)
+        var error: String? = null
+        // An exception escaping this thread would crash the app; stop cleanly and keep what was recorded.
+        try {
+            RandomAccessFile(file, "rw").use { raf ->
+                raf.setLength(0)
+                raf.write(Wav.header(0))
+                while (running) {
+                    if (paused) {
+                        if (isRecording) { rec.stop(); isRecording = false }
+                        Thread.sleep(100)
+                        continue
+                    }
+                    if (!isRecording) { rec.startRecording(); isRecording = true }
+                    val n = rec.read(buf, 0, buf.size)
+                    if (n <= 0) { Thread.sleep(20); continue }
+                    val samples = if (decimator != null) decimator.process(buf, n) else buf.copyOf(n)
+                    val bb = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+                    bb.asShortBuffer().put(samples)
+                    raf.write(bb.array())
+                    written += samples.size * 2
+                    elapsed = written * 1000 / (SAMPLE_RATE * 2)
 
-                val now = SystemClock.elapsedRealtime()
-                if (now - lastUi > 150) {
-                    var sum = 0.0
-                    for (i in 0 until n) { val v = buf[i] / 32768.0; sum += v * v }
-                    val rms = sqrt(sum / n)
-                    val level = (20 * kotlin.math.log10(rms + 1e-6) + 60).coerceIn(0.0, 60.0) / 60.0
-                    _state.value = _state.value.copy(elapsedMs = elapsed, level = level.toFloat())
-                    lastUi = now
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastUi > 150) {
+                        var sum = 0.0
+                        for (i in 0 until n) { val v = buf[i] / 32768.0; sum += v * v }
+                        val rms = sqrt(sum / n)
+                        val level = (20 * kotlin.math.log10(rms + 1e-6) + 60).coerceIn(0.0, 60.0) / 60.0
+                        _state.value = _state.value.copy(elapsedMs = elapsed, level = level.toFloat())
+                        lastUi = now
+                    }
+                    if (now - lastHeader > 5000) {
+                        // keep the file valid at all times, so a crash loses at most a few seconds
+                        val pos = raf.filePointer
+                        raf.seek(0); raf.write(Wav.header(written)); raf.seek(pos)
+                        lastHeader = now
+                    }
                 }
-                if (now - lastHeader > 5000) {
-                    // keep the file valid at all times, so a crash loses at most a few seconds
-                    val pos = raf.filePointer
-                    raf.seek(0); raf.write(Wav.header(written)); raf.seek(pos)
-                    lastHeader = now
-                }
+                raf.seek(0)
+                raf.write(Wav.header(written))
             }
+        } catch (e: Exception) {
+            Log.e("RecordingService", "Opname afgebroken", e)
+            error = "Opname gestopt door een fout: ${e.message ?: e.javaClass.simpleName}"
+            runCatching { Wav.fixHeader(file) }
+        } finally {
             if (isRecording) runCatching { rec.stop() }
             rec.release()
-            raf.seek(0)
-            raf.write(Wav.header(written))
         }
-        finish(elapsed)
+        finish(elapsed, error)
     }
 
-    private fun finish(elapsedMs: Long) {
+    private fun finish(elapsedMs: Long, error: String? = null) {
+        running = false
         val id = _state.value.lectureId ?: return
         LectureRepository.liveRecordingId = null
         if (elapsedMs < 2000) {
@@ -223,11 +234,12 @@ class RecordingService : Service() {
         } else {
             val auto = Settings.current.autoTranscribe
             LectureRepository.update(id) {
-                it.copy(durationMs = elapsedMs, status = if (auto) LectureStatus.QUEUED else LectureStatus.RECORDED, message = null)
+                it.copy(durationMs = elapsedMs, status = if (auto) LectureStatus.QUEUED else LectureStatus.RECORDED,
+                    message = error?.let { "Opname werd door een fout onderbroken; tot dat moment opgeslagen." })
             }
             if (auto) TranscriptionService.enqueue(this, id)
         }
-        _state.value = RecorderState()
+        _state.value = RecorderState(error = error)
         wakeLock?.let { if (it.isHeld) it.release() }
         stopForegroundCompat()
         stopSelf()

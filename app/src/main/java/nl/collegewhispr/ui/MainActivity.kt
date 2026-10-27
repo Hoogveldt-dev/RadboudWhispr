@@ -98,6 +98,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ModelManager.poll(this)
         ModelManager.refresh(this)
         // Pick up lectures that were waiting for a connection or got interrupted.
         if (TranscriptionService.state.value.lectureId == null && RecordingService.state.value.lectureId == null) {

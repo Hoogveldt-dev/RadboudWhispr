@@ -47,8 +47,19 @@ WHISPER_DIR=~/whisper.cpp ANDROID_HOME=~/android-sdk native/build-native.sh
 ./gradlew testDebugUnitTest
 ```
 
-`release.jks` + `keystore.properties` sign the APK. Keep them: updates must be signed with the same
-key to install over the existing app without losing your lectures.
+`release.jks` + `keystore.properties` sign the APK. They are **not in this repository** (see
+`.gitignore`): put your copies in the project root before `assembleRelease`, and keep a backup
+somewhere safe. Updates must be signed with the same key to install over the existing app without
+losing your lectures. Without the two files, `assembleRelease` produces an unsigned APK.
+
+`keystore.properties` looks like this:
+
+```properties
+storeFile=release.jks
+storePassword=...
+keyAlias=collegewhispr
+keyPassword=...
+```
 
 ## Code map
 
