@@ -1,11 +1,16 @@
 # Builds an unsigned release APK. Signing happens outside GitHub with release.jks,
-# so the key never has to be stored here. apksigner.jar is uploaded alongside for that.
+# so the key never has to be stored here. apksigner.jar is shipped alongside for that.
+# The files are uploaded as an artifact and also pushed to the apk-build branch, for
+# machines that can reach GitHub over git but not the artifact storage.
 name: Build APK
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -29,3 +34,11 @@ jobs:
         with:
           name: app-release-unsigned
           path: out/
+      - name: Publish to apk-build branch
+        run: |
+          cd out
+          git init -q -b apk-build
+          git add .
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com \
+            commit -q -m "APK build of ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" apk-build
