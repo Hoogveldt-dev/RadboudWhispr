@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+native/build-*/
+*.iml
+.idea/
+.kotlin/
+# signing key and its passwords: keep these private, never commit
+*.jks
+*.keystore
+keystore.properties

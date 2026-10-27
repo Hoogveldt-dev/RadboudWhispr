@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- microphone capsule -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M54,30a8,8 0,0 1,8 8v16a8,8 0,0 1,-16 0V38a8,8 0,0 1,8 -8z" />
+    <!-- holder arc -->
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="4" android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M40,52a14,14 0,0 0,28 0" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="4" android:strokeLineCap="round"
+        android:pathData="M54,66v6" />
+    <!-- text lines -->
+    <path android:strokeColor="#FFD54F" android:strokeWidth="4" android:strokeLineCap="round"
+        android:pathData="M38,80h32" />
+</vector>
