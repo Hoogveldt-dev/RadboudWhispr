@@ -11,8 +11,9 @@ The interface is in Dutch.
    You can also import an existing recording (m4a, mp3, ogg, wav, video files) or share one to the app.
 2. **Transcribe after the lecture**, automatically:
    - The recording is split into ~10 minute pieces, cut at the quietest moment so no word is chopped.
-   - Each piece goes to the chosen online service when there is internet and a key:
-     **Groq** (`whisper-large-v3`), **Deepgram** (Nova-3, Dutch model) or **Voxtral** (Mistral).
+   - Each piece goes to the chosen online service when there is internet and a key. The default
+     is **Deepgram** (Nova-3, with Dutch and Flemish models); **Groq** (`whisper-large-v3`) and
+     **Voxtral** (Mistral) can be used instead or to compare.
    - Without internet, or if the online service fails, it falls back to **offline whisper.cpp** on the
      tablet (Large v3 Turbo or Small model, with Silero voice-activity detection).
    - Progress is saved per piece, so an interrupted job resumes where it stopped.
@@ -27,21 +28,24 @@ repeated lines are filtered out.
 
 ## Setup on the tablet
 
-1. Install `CollegeWhispr-1.1.0.apk` (allow "install unknown apps" for your file manager/browser).
+1. Install `CollegeWhispr-1.2.0.apk` (allow "install unknown apps" for your file manager/browser).
 2. Open Instellingen:
-   - Under *Online transcriptie*, pick a service and paste its API key, then tap *Testen*:
-     Groq (https://console.groq.com/keys), Deepgram (https://console.deepgram.com/) or
-     Mistral for Voxtral (https://console.mistral.ai/api-keys). Fill in several to compare.
+   - Under *Online transcriptie*, paste a Deepgram API key (https://console.deepgram.com/, then
+     API Keys) and tap *Testen*; it also shows the remaining credit when the key may read billing.
+     Groq and Voxtral sit under *Andere diensten*, only needed to compare.
    - Optionally download an offline model over wifi (Large v3 Turbo: 574 MB).
    - Tap *Batterijoptimalisatie uitzetten*. On Lenovo ZUI/ZUXOS also allow the app to run in the
      background / auto-start in the system's app management, or long recordings may be stopped.
-3. Optional: add course-specific terms and names under *Vaktermen en namen*; it improves spelling.
+3. Optional: add course-specific terms and names under *Vaktermen en namen*, separated by commas;
+   Deepgram receives them as keyterms. Choose *Nederlands (Vlaams)* for Flemish lecturers.
 
 Groq's free plan (checked October 2026) allows 7,200 audio seconds per hour and 28,800 per day,
 25 MB per upload. A 90-minute lecture uses 5,400 seconds. Deepgram and Mistral charge per minute
 (roughly $0.26 and $0.20 per audio hour in October 2026); Deepgram gives starting credit on signup.
 
-Service notes: Deepgram gets the vocabulary as separate keyterms. Voxtral gets them as context bias
+Service notes: Deepgram gets the vocabulary as separate keyterms, and its own sentences (with
+times) become the segments. The filter for Whisper's invented subtitle lines only runs on Whisper
+output, so a lecturer saying a web address on Deepgram is kept. Voxtral gets them as context bias
 (experimental for Dutch per Mistral) and is sent no language, because Mistral does not accept a
 language together with timestamps; it detects the language itself.
 

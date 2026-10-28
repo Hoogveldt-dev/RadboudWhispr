@@ -11,10 +11,10 @@ enum class EngineMode(val label: String) {
     OFFLINE_ONLY("Alleen offline");
 }
 
-/** Online transcription services; [keysUrl] is where a user creates an API key. */
+/** Online transcription services, recommended first; [keysUrl] is where a user creates an API key. */
 enum class CloudProvider(val label: String, val keysUrl: String) {
-    GROQ("Groq", "https://console.groq.com/keys"),
     DEEPGRAM("Deepgram", "https://console.deepgram.com/"),
+    GROQ("Groq", "https://console.groq.com/keys"),
     VOXTRAL("Voxtral", "https://console.mistral.ai/api-keys");
 }
 
@@ -23,7 +23,7 @@ data class SettingsState(
     val groqModel: String = "whisper-large-v3",
     val deepgramKey: String = "",
     val mistralKey: String = "",
-    val cloud: CloudProvider = CloudProvider.GROQ,
+    val cloud: CloudProvider = CloudProvider.DEEPGRAM,
     val engine: EngineMode = EngineMode.AUTO,
     val language: String = "nl",
     val offlineModel: String = "large-v3-turbo-q5_0",
@@ -42,6 +42,9 @@ data class SettingsState(
         CloudProvider.DEEPGRAM -> copy(deepgramKey = key)
         CloudProvider.VOXTRAL -> copy(mistralKey = key)
     }
+
+    /** [language] for Whisper-based engines, which know "nl" but not regional codes like "nl-BE". */
+    val whisperLanguage: String get() = language.substringBefore('-')
 }
 
 object Settings {
@@ -60,8 +63,7 @@ object Settings {
             groqModel = prefs.getString("groqModel", "whisper-large-v3") ?: "whisper-large-v3",
             deepgramKey = prefs.getString("deepgramKey", "") ?: "",
             mistralKey = prefs.getString("mistralKey", "") ?: "",
-            cloud = runCatching { CloudProvider.valueOf(prefs.getString("cloud", "GROQ")!!) }
-                .getOrDefault(CloudProvider.GROQ),
+            cloud = cloudFromPrefs(),
             engine = engineFromPrefs(prefs.getString("engine", "AUTO")),
             language = prefs.getString("language", "nl") ?: "nl",
             offlineModel = prefs.getString("offlineModel", "large-v3-turbo-q5_0") ?: "large-v3-turbo-q5_0",
@@ -69,6 +71,18 @@ object Settings {
             autoTranscribe = prefs.getBoolean("autoTranscribe", true),
             exportTimestamps = prefs.getBoolean("exportTimestamps", true),
         )
+    }
+
+    // Until 1.2 Groq was the default. Switch once to Deepgram, unless Groq was actually set up.
+    private fun cloudFromPrefs(): CloudProvider {
+        val stored = prefs.getString("cloud", null)
+        if (!prefs.getBoolean("deepgramDefault", false)) {
+            prefs.edit().putBoolean("deepgramDefault", true).apply()
+            if (stored == null || (stored == "GROQ" && prefs.getString("groqKey", "").isNullOrBlank())) {
+                return CloudProvider.DEEPGRAM
+            }
+        }
+        return runCatching { CloudProvider.valueOf(stored!!) }.getOrDefault(CloudProvider.DEEPGRAM)
     }
 
     // 1.0 stored "GROQ_ONLY" before there was a choice of online service.
@@ -98,7 +112,7 @@ object Settings {
     fun basePrompt(): String {
         val s = current
         val vocab = s.vocabulary.trim()
-        val style = if (s.language == "nl") DEFAULT_PROMPT else ""
+        val style = if (s.whisperLanguage == "nl") DEFAULT_PROMPT else ""
         return listOf(style, vocab).filter { it.isNotBlank() }.joinToString(" ")
     }
 

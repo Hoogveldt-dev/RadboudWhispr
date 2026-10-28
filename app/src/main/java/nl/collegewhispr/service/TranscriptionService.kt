@@ -306,7 +306,7 @@ class TranscriptionService : Service() {
                 if (local.available()) {
                     usedEngine = "Offline (${local.modelLabel()})"
                     progress(0f, usedEngine)
-                    result = local.transcribe(samples, settings.language, prompt) { p -> progress(p / 100f, usedEngine) }
+                    result = local.transcribe(samples, settings.whisperLanguage, prompt) { p -> progress(p / 100f, usedEngine) }
                     if (result == null) coroutineContextCheck() // aborted by Stoppen
                     if (result == null) reason = "Offline transcriptie mislukt"
                 } else if (reason == null || mode == EngineMode.OFFLINE_ONLY) {
@@ -351,7 +351,7 @@ class TranscriptionService : Service() {
         for (attempt in 1..4) {
             try {
                 val segments = when (provider) {
-                    CloudProvider.GROQ -> GroqClient.transcribe(key, s.groqModel, wav, s.language, if (hints) prompt else "")
+                    CloudProvider.GROQ -> GroqClient.transcribe(key, s.groqModel, wav, s.whisperLanguage, if (hints) prompt else "")
                     CloudProvider.DEEPGRAM -> DeepgramClient.transcribe(key, wav, s.language, if (hints) Settings.terms() else emptyList())
                     CloudProvider.VOXTRAL -> VoxtralClient.transcribe(key, wav, if (hints) Settings.terms() else emptyList())
                 }

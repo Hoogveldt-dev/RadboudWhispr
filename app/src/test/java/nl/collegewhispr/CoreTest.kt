@@ -6,7 +6,9 @@ import nl.collegewhispr.audio.Dsp
 import nl.collegewhispr.audio.SAMPLE_RATE
 import nl.collegewhispr.audio.Wav
 import nl.collegewhispr.data.Segment
+import nl.collegewhispr.data.CloudProvider
 import nl.collegewhispr.data.Settings
+import nl.collegewhispr.data.SettingsState
 import nl.collegewhispr.transcribe.DeepgramClient
 import nl.collegewhispr.transcribe.Http
 import nl.collegewhispr.transcribe.TextFormat
@@ -120,7 +122,7 @@ class CoreTest {
             Segment(15000, 18000, "Dan het tweede onderwerp."),
             Segment(18000, 19000, "..."),
         )
-        val paras = TextFormat.paragraphs(segs)
+        val paras = TextFormat.paragraphs(TextFormat.dropHallucinations(segs))
         assertEquals(2, paras.size)
         assertEquals("Welkom bij dit college. We beginnen met de casus.", paras[0].text)
         assertEquals(15000L, paras[1].startMs)
@@ -142,6 +144,16 @@ class CoreTest {
         assertEquals(listOf("Goedemorgen allemaal.", "Vandaag hoofdstuk drie."), segs.map { it.text })
         assertEquals(320L, segs[0].startMs)
         assertEquals(5750L, segs[1].endMs)
+        // Deepgram's own sentences win over utterances when paragraphs=true returned them
+        val withParagraphs = """{"results":{
+          "channels":[{"alternatives":[{"transcript":"x","paragraphs":{"transcript":"x","paragraphs":[
+            {"sentences":[{"text":"Welkom bij het college.","start":0.5,"end":2.0},{"text":"Kijk op www.uu.nl.","start":2.2,"end":3.9}],"start":0.5,"end":3.9},
+            {"sentences":[{"text":"Dan de casus.","start":9.0,"end":10.25}],"start":9.0,"end":10.25}
+          ]}}]}],
+          "utterances":[{"start":0.5,"end":10.25,"transcript":"Welkom bij het college. Kijk op www.uu.nl. Dan de casus."}]}}"""
+        val sentences = DeepgramClient.parse(withParagraphs)
+        assertEquals(listOf("Welkom bij het college.", "Kijk op www.uu.nl.", "Dan de casus."), sentences.map { it.text })
+        assertEquals(9000L, sentences[2].startMs)
         // without utterances, fall back to the whole transcript
         val plain = """{"results":{"channels":[{"alternatives":[{"transcript":"Alleen tekst."}]}]}}"""
         assertEquals(listOf("Alleen tekst."), DeepgramClient.parse(plain).map { it.text })
@@ -172,5 +184,22 @@ class CoreTest {
             Settings.splitTerms("prof. Jansen, dr. El Amrani;Rawls\n\n casus Lindenbaum/Cohen , Rawls"),
         )
         assertTrue(Settings.splitTerms("  ").isEmpty())
+    }
+
+    @Test
+    fun hallucinationFilterIsSeparateFromCleaning() {
+        // A lecturer may really say a web address; only Whisper output goes through dropHallucinations.
+        val real = listOf(Segment(0, 2000, "Kijk op www.uu.nl."))
+        assertEquals(1, TextFormat.paragraphs(real).size)
+        assertTrue(TextFormat.dropHallucinations(real).isEmpty())
+        assertEquals(1, TextFormat.dropHallucinations(listOf(Segment(0, 1, "Ondertiteling TV Gelderland"), Segment(1, 2, "Goedemorgen."))).size)
+    }
+
+    @Test
+    fun whisperGetsBaseLanguageCode() {
+        assertEquals("nl", SettingsState(language = "nl-BE").whisperLanguage)
+        assertEquals("nl", SettingsState(language = "nl").whisperLanguage)
+        assertEquals("auto", SettingsState(language = "auto").whisperLanguage)
+        assertEquals(CloudProvider.DEEPGRAM, SettingsState().cloud)
     }
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import nl.collegewhispr.audio.Wav
+import nl.collegewhispr.transcribe.TextFormat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -101,8 +102,12 @@ object LectureRepository {
         chunksFile(id).delete()
     }
 
-    fun segments(id: String): List<Segment> =
-        loadChunks(id)?.filter { it.done }?.flatMap { it.segments } ?: emptyList()
+    fun segments(id: String): List<Segment> = readable(loadChunks(id) ?: emptyList())
+
+    /** Segments of the finished chunks, with Whisper hallucinations removed where Whisper made them. */
+    private fun readable(chunks: List<Chunk>): List<Segment> = chunks.filter { it.done }.flatMap { c ->
+        if (c.engine?.startsWith("Deepgram") == true) c.segments else TextFormat.dropHallucinations(c.segments)
+    }
 
     // --- earlier transcripts, kept to compare engines ---
 
@@ -125,7 +130,7 @@ object LectureRepository {
 
     fun versionSegments(id: String, name: String): List<Segment> = runCatching {
         val arr = JSONArray(File(versionsDir(id), "$name.json").readText())
-        (0 until arr.length()).map { Chunk.fromJson(arr.getJSONObject(it)) }.filter { it.done }.flatMap { it.segments }
+        readable((0 until arr.length()).map { Chunk.fromJson(arr.getJSONObject(it)) })
     }.getOrDefault(emptyList())
 
     fun deleteVersion(id: String, name: String) {

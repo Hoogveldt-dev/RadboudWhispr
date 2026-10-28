@@ -21,6 +21,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -95,51 +97,106 @@ fun SettingsScreen(onBack: () -> Unit) {
         ) {
             Section("Online transcriptie") {
                 Text(
-                    "Snel en nauwkeurig. Kies welke dienst de app gebruikt en vul daarvan de API-sleutel in. " +
-                        "Vul je meerdere sleutels in, dan kun je per college vergelijken: menu ⋮, " +
-                        "Opnieuw transcriberen met …",
+                    "Deepgram zet je opname na het college om naar tekst, met een eigen Nederlands model. " +
+                        "Bij een nieuw account krijg je gratis startegoed; daarna kost een college van 90 minuten " +
+                        "ongeveer \$0,40.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                ProviderBlock(CloudProvider.GROQ, s, "Gratis: ongeveer 8 uur audio per dag (Whisper).") {
-                    GroqClient.checkKey(it)
-                }
-                Column(Modifier.padding(start = 48.dp)) {
-                    Text("Groq-model", fontWeight = FontWeight.Bold)
-                    Choice("whisper-large-v3 (nauwkeurigst, aanbevolen)", s.groqModel == "whisper-large-v3") {
-                        Settings.update { it.copy(groqModel = "whisper-large-v3") }
-                    }
-                    Choice("whisper-large-v3-turbo (sneller, iets minder nauwkeurig)", s.groqModel == "whisper-large-v3-turbo") {
-                        Settings.update { it.copy(groqModel = "whisper-large-v3-turbo") }
-                    }
-                }
                 ProviderBlock(
                     CloudProvider.DEEPGRAM, s,
-                    "Nova-3 met een eigen Nederlands model. Gratis startegoed, daarna betaald per minuut " +
-                        "(ca. \$0,26 per uur audio).",
-                ) { DeepgramClient.checkKey(it) }
-                ProviderBlock(
-                    CloudProvider.VOXTRAL, s,
-                    "Mistral (Frans bedrijf). Betaald per minuut (ca. \$0,20 per uur audio). Herkent de taal zelf; " +
-                        "vaktermen werken voor Nederlands nog experimenteel.",
-                ) { VoxtralClient.checkKey(it) }
+                    "Aanbevolen. Nova-3 met eigen modellen voor Nederlands en Vlaams.",
+                ) { key -> DeepgramClient.checkKey(key) ?: DeepgramClient.balance(key)?.let { "Sleutel werkt. $it" } }
+                Text(
+                    "Sleutel aanmaken: tik op Sleutel aanmaken, maak een account aan, ga naar API Keys, maak een " +
+                        "nieuwe sleutel aan en kopieer die hierheen.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 48.dp),
+                )
+
+                var others by remember {
+                    mutableStateOf(s.cloud != CloudProvider.DEEPGRAM || s.groqKey.isNotBlank() || s.mistralKey.isNotBlank())
+                }
+                TextButton(onClick = { others = !others }) {
+                    Icon(if (others) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null)
+                    Spacer(Modifier.size(6.dp))
+                    Text(if (others) "Andere diensten verbergen" else "Andere diensten (Groq, Voxtral)")
+                }
+                if (others) {
+                    Text(
+                        "Alleen nodig als je wilt vergelijken: menu ⋮ bij een college, Opnieuw transcriberen met …",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    ProviderBlock(CloudProvider.GROQ, s, "Gratis: ongeveer 8 uur audio per dag (Whisper).") {
+                        GroqClient.checkKey(it)
+                    }
+                    Column(Modifier.padding(start = 48.dp)) {
+                        Text("Groq-model", fontWeight = FontWeight.Bold)
+                        Choice("whisper-large-v3 (nauwkeurigst, aanbevolen)", s.groqModel == "whisper-large-v3") {
+                            Settings.update { it.copy(groqModel = "whisper-large-v3") }
+                        }
+                        Choice("whisper-large-v3-turbo (sneller, iets minder nauwkeurig)", s.groqModel == "whisper-large-v3-turbo") {
+                            Settings.update { it.copy(groqModel = "whisper-large-v3-turbo") }
+                        }
+                    }
+                    ProviderBlock(
+                        CloudProvider.VOXTRAL, s,
+                        "Mistral. Vraagt om een betaald plan. Herkent de taal zelf; vaktermen werken voor " +
+                            "Nederlands nog experimenteel.",
+                    ) { VoxtralClient.checkKey(it) }
+                }
             }
 
-            Section("Welke engine?") {
-                EngineMode.entries.forEach { m ->
-                    Choice(m.label, s.engine == m) { Settings.update { it.copy(engine = m) } }
-                }
+            Section("Taal en vakjargon") {
+                Choice("Nederlands", s.language == "nl") { Settings.update { it.copy(language = "nl") } }
+                Choice("Nederlands (Vlaams)", s.language == "nl-BE") { Settings.update { it.copy(language = "nl-BE") } }
+                Choice("Engels", s.language == "en") { Settings.update { it.copy(language = "en") } }
+                Choice("Automatisch herkennen", s.language == "auto") { Settings.update { it.copy(language = "auto") } }
+                var vocab by remember { mutableStateOf(s.vocabulary) }
+                OutlinedTextField(
+                    value = vocab,
+                    onValueChange = { if (it.length <= 400) { vocab = it; Settings.update { st -> st.copy(vocabulary = it) } } },
+                    label = { Text("Vaktermen en namen (optioneel)") },
+                    placeholder = { Text("Bijv. prof. Jansen, utilitarisme, Lindenbaum/Cohen") },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Text(
-                    "Bij \"Online, anders offline\" valt de app automatisch terug op het offline model als er geen " +
-                        "internet is of de online dienst niet werkt.",
+                    "Namen van docenten, afkortingen en vaktermen die vaak terugkomen. Scheid ze met komma's; " +
+                        "Deepgram herkent ze dan beter. Maximaal 400 tekens; pas ze per vak aan.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
-            Section("Offline spraakmodel") {
+            Section("Algemeen") {
+                Toggle("Automatisch transcriberen na opname", s.autoTranscribe) {
+                    Settings.update { st -> st.copy(autoTranscribe = it) }
+                }
+                Toggle("Tijdstempels in export", s.exportTimestamps) {
+                    Settings.update { st -> st.copy(exportTimestamps = it) }
+                }
+                BatteryRow()
+            }
+
+            Section("Online of offline") {
+                EngineMode.entries.forEach { m ->
+                    Choice(m.label, s.engine == m) { Settings.update { it.copy(engine = m) } }
+                }
                 Text(
-                    "Werkt zonder internet, op de tablet zelf. Een college van 90 minuten kan ongeveer net zo lang " +
-                        "duren om te verwerken (afhankelijk van de tablet). Houd de tablet aan de lader.",
+                    "Bij \"Online, anders offline\" valt de app terug op het offline model als er geen internet is " +
+                        "of ${s.cloud.label} niet werkt, bijvoorbeeld als het tegoed op is.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Section("Offline spraakmodel (optioneel)") {
+                Text(
+                    "Reserve voor als er geen internet is of ${s.cloud.label} niet werkt. Draait op de tablet zelf: " +
+                        "een college van 90 minuten kan ongeveer net zo lang duren om te verwerken. Houd de tablet " +
+                        "aan de lader.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 ModelManager.models.forEach { m ->
@@ -189,37 +246,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-
-            Section("Taal en vakjargon") {
-                Choice("Nederlands", s.language == "nl") { Settings.update { it.copy(language = "nl") } }
-                Choice("Engels", s.language == "en") { Settings.update { it.copy(language = "en") } }
-                Choice("Automatisch herkennen", s.language == "auto") { Settings.update { it.copy(language = "auto") } }
-                var vocab by remember { mutableStateOf(s.vocabulary) }
-                OutlinedTextField(
-                    value = vocab,
-                    onValueChange = { if (it.length <= 400) { vocab = it; Settings.update { st -> st.copy(vocabulary = it) } } },
-                    label = { Text("Vaktermen en namen (optioneel)") },
-                    placeholder = { Text("Bijv. namen van docenten, afkortingen en vaktermen die vaak terugkomen") },
-                    minLines = 3,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    "Helpt bij de spelling. Scheid termen met komma's; Deepgram en Voxtral gebruiken ze als losse " +
-                        "termen. Kort houden: maximaal 400 tekens.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            Section("Algemeen") {
-                Toggle("Automatisch transcriberen na opname", s.autoTranscribe) {
-                    Settings.update { st -> st.copy(autoTranscribe = it) }
-                }
-                Toggle("Tijdstempels in export", s.exportTimestamps) {
-                    Settings.update { st -> st.copy(exportTimestamps = it) }
-                }
-                BatteryRow()
             }
 
             val info = remember { runCatching { WhisperLib.variant }.getOrDefault("niet geladen") }

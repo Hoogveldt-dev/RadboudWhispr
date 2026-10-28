@@ -11,14 +11,22 @@ object TextFormat {
         "www.", "abonneer op", "like en abonneer",
     )
 
+    /**
+     * Drops those phrases. Only for Whisper output (Groq, Voxtral, offline): Deepgram does not
+     * invent them, and there a short line with "www." is something the lecturer really said.
+     */
+    fun dropHallucinations(segments: List<Segment>): List<Segment> = segments.filterNot { s ->
+        val t = s.text.trim()
+        t.length < 90 && hallucinations.any { t.lowercase().contains(it) }
+    }
+
+    /** Removes empty, punctuation-only and immediately repeated lines. */
     fun clean(segments: List<Segment>): List<Segment> {
         val out = mutableListOf<Segment>()
         var repeat = 0
         for (s in segments) {
             val t = s.text.trim()
             if (t.isEmpty()) continue
-            val lower = t.lowercase()
-            if (t.length < 90 && hallucinations.any { lower.contains(it) }) continue
             if (t.all { !it.isLetterOrDigit() }) continue
             val prev = out.lastOrNull()
             if (prev != null && prev.text.equals(t, ignoreCase = true)) {
