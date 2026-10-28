@@ -2,7 +2,7 @@
 
 Android app for transcribing Dutch lectures, based on the approach of
 [OpenWhispr](https://github.com/OpenWhispr/openwhispr) (Whisper models, whisper.cpp for local mode).
-The interface is in Dutch.
+The interface is in Dutch, styled after iOS (grouped lists, large titles, system colors, light and dark).
 
 ## What it does
 
@@ -28,7 +28,7 @@ repeated lines are filtered out.
 
 ## Setup on the tablet
 
-1. Install `CollegeWhispr-1.2.0.apk` (allow "install unknown apps" for your file manager/browser).
+1. Install `CollegeWhispr-1.3.0.apk` (allow "install unknown apps" for your file manager/browser).
 2. Open Instellingen:
    - Under *Online transcriptie*, paste a Deepgram API key (https://console.deepgram.com/, then
      API Keys) and tap *Testen*; it also shows the remaining credit when the key may read billing.
@@ -88,7 +88,7 @@ keyPassword=...
 | `whisper/ModelManager.kt` | offline model downloads via Android DownloadManager |
 | `audio/` | WAV helpers, silence-aware chunker, resampler, audio import |
 | `transcribe/TextFormat.kt` | hallucination filter, paragraphs, export formats |
-| `ui/` | Jetpack Compose screens |
+| `ui/` | Jetpack Compose screens; `Theme.kt` (iOS palette, type scale) and `Components.kt` (grouped lists, rows, switches, alerts) give the iOS look |
 
 ## Changing it with Claude Code
 

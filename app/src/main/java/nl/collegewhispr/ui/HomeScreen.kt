@@ -1,8 +1,12 @@
 package nl.collegewhispr.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,46 +14,43 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import nl.collegewhispr.data.Lecture
 import nl.collegewhispr.data.LectureRepository
-import nl.collegewhispr.data.LectureStatus
 import nl.collegewhispr.data.Settings
+import nl.collegewhispr.service.RecorderState
 import nl.collegewhispr.service.RecordingService
 import nl.collegewhispr.service.TranscriptionService
 import nl.collegewhispr.transcribe.TextFormat
@@ -58,54 +59,87 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(activity: MainActivity, onOpen: (String) -> Unit, onSettings: () -> Unit) {
+    val ios = LocalIos.current
     val lectures by LectureRepository.lectures.collectAsState()
     val rec by RecordingService.state.collectAsState()
     val tx by TranscriptionService.state.collectAsState()
     val settings by Settings.state.collectAsState()
     val installed by ModelManager.installed.collectAsState()
     val needsSetup = settings.keyFor(settings.cloud).isBlank() && ModelManager.models.none { it.id in installed }
+    val list = rememberLazyListState()
+    // Like iOS: the large title scrolls away and the bar then shows a small one.
+    val collapsed by remember { derivedStateOf { list.firstVisibleItemIndex > 0 } }
 
     Scaffold(
+        containerColor = ios.background,
         topBar = {
-            TopAppBar(
-                title = { Text("CollegeWhispr") },
-                actions = {
-                    IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Instellingen") }
-                },
-            )
+            NavBar(title = if (collapsed) "Colleges" else null) {
+                IconButton(onClick = onSettings) { Icon(Icons.Outlined.Settings, "Instellingen", tint = ios.accent) }
+            }
         },
     ) { pad ->
         LazyColumn(
             Modifier.fillMaxSize().padding(pad),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            state = list,
+            contentPadding = PaddingValues(bottom = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            item { LargeTitle("Colleges") }
             if (needsSetup) item {
-                Card(
-                    Modifier.fillMaxWidth().widthIn(max = 720.dp).clickable(onClick = onSettings),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("Eerst instellen", fontWeight = FontWeight.Bold)
-                        Text("Voeg een API-sleutel toe voor ${settings.cloud.label} en/of download een offline spraakmodel. " +
-                            "Opnemen kan nu al.")
-                    }
+                Group {
+                    NavRow(
+                        title = "Eerst instellen",
+                        subtitle = "Voeg een API-sleutel toe voor ${settings.cloud.label}. Opnemen kan nu al.",
+                        onClick = onSettings,
+                        leading = { IconTile(Icons.Filled.Key, ios.orange) },
+                    )
                 }
             }
             item { RecorderCard(activity, rec) }
-            items(lectures, key = { it.id }) { l ->
-                LectureRow(l, if (tx.lectureId == l.id) tx.chunk to tx.chunks else null) { onOpen(l.id) }
-            }
-            if (lectures.isEmpty()) item {
-                Text(
-                    "Nog geen opnames. Tik op Opnemen aan het begin van het college.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 24.dp),
-                )
+            if (lectures.isEmpty()) {
+                item {
+                    Group {
+                        Column(
+                            Modifier.fillMaxWidth().padding(vertical = 28.dp, horizontal = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Icon(Icons.Filled.Mic, null, tint = ios.tertiaryLabel, modifier = Modifier.size(36.dp))
+                            Spacer(Modifier.height(8.dp))
+                            Text("Nog geen opnames", style = IosType.headline, color = ios.label)
+                            Text(
+                                "Tik op de opnameknop aan het begin van het college.",
+                                style = IosType.footnote, color = ios.secondaryLabel, textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+                }
+            } else {
+                item {
+                    Text(
+                        "OPNAMES", style = IosType.footnote, color = ios.secondaryLabel,
+                        modifier = Modifier.widthIn(max = ContentWidth).fillMaxWidth()
+                            .padding(start = 32.dp, top = 14.dp, bottom = 6.dp),
+                    )
+                }
+                itemsIndexed(lectures, key = { _, l -> l.id }) { i, l ->
+                    Column(
+                        Modifier.widthIn(max = ContentWidth).fillMaxWidth().padding(horizontal = 16.dp)
+                            .clip(groupShape(i, lectures.size)).background(ios.card),
+                    ) {
+                        NavRow(
+                            title = l.title,
+                            subtitle = rowDate.format(Date(l.createdAt)) + " · " + TextFormat.time(l.durationMs),
+                            onClick = { onOpen(l.id) },
+                            below = {
+                                Spacer(Modifier.height(4.dp))
+                                StatusLine(l, if (tx.lectureId == l.id) tx.chunk to tx.chunks else null)
+                            },
+                        )
+                        if (i < lectures.size - 1) Separator()
+                    }
+                }
             }
         }
     }
@@ -114,128 +148,123 @@ fun HomeScreen(activity: MainActivity, onOpen: (String) -> Unit, onSettings: () 
         AlertDialog(
             onDismissRequest = {},
             confirmButton = {},
-            title = { Text("Audio importeren") },
+            title = { Text("Audio importeren", style = IosType.headline, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
             text = {
                 Column {
-                    Text("Bestand wordt omgezet…")
-                    Spacer(Modifier.height(12.dp))
-                    LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+                    Text("Bestand wordt omgezet…", style = IosType.footnote, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(14.dp))
+                    ThinProgress(p)
                 }
             },
+            shape = RoundedCornerShape(14.dp),
+            containerColor = ios.card,
+            tonalElevation = 0.dp,
         )
     }
     activity.importError?.let { err ->
-        AlertDialog(
-            onDismissRequest = { activity.importError = null },
-            confirmButton = { TextButton({ activity.importError = null }) { Text("OK") } },
-            text = { Text(err) },
-        )
+        IosAlert(title = "Let op", message = err, confirm = "OK", dismiss = null,
+            onConfirm = { activity.importError = null }, onDismiss = { activity.importError = null })
     }
     rec.error?.let { err ->
-        AlertDialog(
-            onDismissRequest = { RecordingService.clearError() },
-            confirmButton = { TextButton({ RecordingService.clearError() }) { Text("OK") } },
-            text = { Text(err) },
-        )
+        IosAlert(title = "Opname", message = err, confirm = "OK", dismiss = null,
+            onConfirm = { RecordingService.clearError() }, onDismiss = { RecordingService.clearError() })
     }
 }
 
+/** Corner shape for row [i] of [n] rows that together look like one grouped card. */
+fun groupShape(i: Int, n: Int): Shape {
+    val r = 12.dp
+    return when {
+        n == 1 -> RoundedCornerShape(r)
+        i == 0 -> RoundedCornerShape(topStart = r, topEnd = r)
+        i == n - 1 -> RoundedCornerShape(bottomStart = r, bottomEnd = r)
+        else -> RoundedCornerShape(0.dp)
+    }
+}
+
+/** Small rounded square with a white symbol, like the icons in iOS Settings. */
 @Composable
-private fun RecorderCard(activity: MainActivity, rec: nl.collegewhispr.service.RecorderState) {
-    Card(Modifier.fillMaxWidth().widthIn(max = 720.dp)) {
-        Column(
-            Modifier.fillMaxWidth().padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            if (!rec.recording) {
-                Button(
-                    onClick = { activity.startRecording() },
-                    shape = CircleShape,
-                    modifier = Modifier.size(120.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                ) {
-                    Icon(Icons.Filled.Mic, null, Modifier.size(48.dp))
+fun IconTile(icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color) {
+    Box(
+        Modifier.size(30.dp).clip(RoundedCornerShape(7.dp)).background(color),
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp)) }
+}
+
+@Composable
+private fun RecorderCard(activity: MainActivity, rec: RecorderState) {
+    val ios = LocalIos.current
+    Group {
+        if (!rec.recording) {
+            Column(
+                Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                RecordButton(recording = false) { activity.startRecording() }
+                Spacer(Modifier.height(14.dp))
+                Text("Opnemen", style = IosType.headline, color = ios.label)
+                Text("Tik aan het begin van het college", style = IosType.footnote, color = ios.secondaryLabel)
+            }
+            Separator()
+            ActionRow("Bestaande opname importeren", onClick = { activity.pickAudioFile() }, icon = Icons.Filled.FileUpload)
+        } else {
+            Column(
+                Modifier.fillMaxWidth().padding(vertical = 24.dp, horizontal = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (rec.paused) ios.secondaryLabel else ios.red))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (rec.paused) "Gepauzeerd" else "Opname loopt",
+                        style = IosType.footnote.copy(fontWeight = FontWeight.SemiBold),
+                        color = if (rec.paused) ios.secondaryLabel else ios.red,
+                    )
                 }
-                Spacer(Modifier.height(12.dp))
-                Text("Opnemen", style = MaterialTheme.typography.titleMedium)
-                TextButton(onClick = { activity.pickAudioFile() }) {
-                    Icon(Icons.Filled.FileUpload, null)
-                    Spacer(Modifier.size(8.dp))
-                    Text("Bestaande opname importeren")
-                }
-            } else {
                 Text(
-                    if (rec.paused) "Gepauzeerd" else "Opname loopt",
-                    color = if (rec.paused) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-                    fontWeight = FontWeight.Bold,
+                    TextFormat.time(rec.elapsedMs),
+                    style = TextStyle(fontSize = 60.sp, fontWeight = FontWeight.Light, fontFeatureSettings = "tnum"),
+                    color = ios.label,
                 )
-                Text(TextFormat.time(rec.elapsedMs), fontSize = 56.sp, fontWeight = FontWeight.Light)
-                LinearProgressIndicator(
-                    progress = { if (rec.paused) 0f else rec.level },
-                    modifier = Modifier.fillMaxWidth(0.6f).height(8.dp),
-                )
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    FilledTonalButton(onClick = {
-                        if (rec.paused) RecordingService.resume(activity) else RecordingService.pause(activity)
-                    }) {
-                        Icon(if (rec.paused) Icons.Filled.PlayArrow else Icons.Filled.Pause, null)
-                        Spacer(Modifier.size(6.dp))
-                        Text(if (rec.paused) "Hervatten" else "Pauzeren")
-                    }
-                    Button(
-                        onClick = { RecordingService.stop(activity) },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ThinProgress(if (rec.paused) 0f else rec.level, color = ios.red, modifier = Modifier.widthIn(max = 280.dp))
+                Spacer(Modifier.height(24.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(36.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(56.dp).clip(CircleShape).background(ios.fill).clickable {
+                            if (rec.paused) RecordingService.resume(activity) else RecordingService.pause(activity)
+                        },
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Icon(Icons.Filled.Stop, null)
-                        Spacer(Modifier.size(6.dp))
-                        Text("Stoppen")
+                        Icon(
+                            if (rec.paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                            if (rec.paused) "Hervatten" else "Pauzeren", tint = ios.label,
+                        )
                     }
+                    RecordButton(recording = true) { RecordingService.stop(activity) }
+                    Spacer(Modifier.size(56.dp))
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(16.dp))
                 Text(
                     "Je kunt het scherm uitzetten; de opname loopt door.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = IosType.footnote, color = ios.secondaryLabel, textAlign = TextAlign.Center,
                 )
             }
         }
     }
 }
 
+/** Voice Memos-style button: red circle in a ring; a red rounded square (stop) while recording. */
+@Composable
+private fun RecordButton(recording: Boolean, onClick: () -> Unit) {
+    val ios = LocalIos.current
+    Box(
+        Modifier.size(78.dp).border(3.dp, ios.tertiaryLabel, CircleShape).padding(6.dp)
+            .clip(CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (recording) Box(Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(ios.red))
+        else Box(Modifier.fillMaxSize().clip(CircleShape).background(ios.red))
+    }
+}
+
 private val rowDate = SimpleDateFormat("EEE d MMM, HH:mm", Locale("nl", "NL"))
-
-@Composable
-private fun LectureRow(l: Lecture, chunkInfo: Pair<Int, Int>?, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth().widthIn(max = 720.dp).clickable(onClick = onClick)) {
-        Column(Modifier.padding(16.dp)) {
-            Text(l.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(
-                rowDate.format(Date(l.createdAt)) + " · " + TextFormat.time(l.durationMs),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(6.dp))
-            StatusLine(l, chunkInfo)
-        }
-    }
-}
-
-@Composable
-fun StatusLine(l: Lecture, chunkInfo: Pair<Int, Int>?) {
-    val color = when (l.status) {
-        LectureStatus.DONE -> MaterialTheme.colorScheme.primary
-        LectureStatus.ERROR, LectureStatus.WAITING -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    val extra = if (l.status == LectureStatus.TRANSCRIBING && chunkInfo != null && chunkInfo.second > 0)
-        " (deel ${chunkInfo.first} van ${chunkInfo.second}, ${(l.progress * 100).toInt()}%)" else ""
-    Text(l.status.label + extra, color = color, style = MaterialTheme.typography.labelLarge)
-    if (l.status == LectureStatus.TRANSCRIBING) {
-        Spacer(Modifier.height(4.dp))
-        LinearProgressIndicator(progress = { l.progress }, modifier = Modifier.fillMaxWidth())
-    }
-    l.message?.let {
-        if (l.status != LectureStatus.DONE) Text(it, style = MaterialTheme.typography.bodySmall, color = color)
-    }
-}
