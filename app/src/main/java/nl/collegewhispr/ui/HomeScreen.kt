@@ -66,7 +66,7 @@ fun HomeScreen(activity: MainActivity, onOpen: (String) -> Unit, onSettings: () 
     val tx by TranscriptionService.state.collectAsState()
     val settings by Settings.state.collectAsState()
     val installed by ModelManager.installed.collectAsState()
-    val needsSetup = settings.groqKey.isBlank() && ModelManager.models.none { it.id in installed }
+    val needsSetup = settings.keyFor(settings.cloud).isBlank() && ModelManager.models.none { it.id in installed }
 
     Scaffold(
         topBar = {
@@ -91,7 +91,8 @@ fun HomeScreen(activity: MainActivity, onOpen: (String) -> Unit, onSettings: () 
                 ) {
                     Column(Modifier.padding(16.dp)) {
                         Text("Eerst instellen", fontWeight = FontWeight.Bold)
-                        Text("Voeg een gratis Groq API-sleutel toe en/of download een offline spraakmodel. Opnemen kan nu al.")
+                        Text("Voeg een API-sleutel toe voor ${settings.cloud.label} en/of download een offline spraakmodel. " +
+                            "Opnemen kan nu al.")
                     }
                 }
             }

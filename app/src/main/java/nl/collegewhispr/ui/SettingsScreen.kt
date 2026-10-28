@@ -58,9 +58,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import nl.collegewhispr.data.CloudProvider
 import nl.collegewhispr.data.EngineMode
 import nl.collegewhispr.data.Settings
+import nl.collegewhispr.data.SettingsState
+import nl.collegewhispr.transcribe.DeepgramClient
 import nl.collegewhispr.transcribe.GroqClient
+import nl.collegewhispr.transcribe.VoxtralClient
 import nl.collegewhispr.whisper.ModelManager
 import nl.collegewhispr.whisper.WhisperLib
 
@@ -71,7 +75,6 @@ fun SettingsScreen(onBack: () -> Unit) {
     val s by Settings.state.collectAsState()
     val installed by ModelManager.installed.collectAsState()
     val downloads by ModelManager.downloads.collectAsState()
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         while (true) { ModelManager.poll(ctx); delay(1000) }
@@ -90,50 +93,35 @@ fun SettingsScreen(onBack: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Section("Groq (online, gratis)") {
+            Section("Online transcriptie") {
                 Text(
-                    "Snel en het nauwkeurigst. Maak gratis een API-sleutel aan op console.groq.com. " +
-                        "Het gratis plan dekt ongeveer 8 uur audio per dag.",
+                    "Snel en nauwkeurig. Kies welke dienst de app gebruikt en vul daarvan de API-sleutel in. " +
+                        "Vul je meerdere sleutels in, dan kun je per college vergelijken: menu ⋮, " +
+                        "Opnieuw transcriberen met …",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                var key by remember { mutableStateOf(s.groqKey) }
-                var show by remember { mutableStateOf(false) }
-                var check by remember { mutableStateOf<String?>(null) }
-                OutlinedTextField(
-                    value = key,
-                    onValueChange = { key = it.trim(); Settings.update { st -> st.copy(groqKey = key) }; check = null },
-                    label = { Text("Groq API-sleutel (begint met gsk_)") },
-                    singleLine = true,
-                    visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    trailingIcon = {
-                        IconButton(onClick = { show = !show }) {
-                            Icon(if (show) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Tonen")
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = {
-                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys")))
-                    }) { Text("Sleutel aanmaken") }
-                    Button(enabled = key.isNotBlank(), onClick = {
-                        check = "Bezig met controleren…"
-                        scope.launch {
-                            val r = withContext(Dispatchers.IO) { GroqClient.checkKey(key) }
-                            check = r ?: "Sleutel werkt"
-                        }
-                    }) { Text("Testen") }
+                ProviderBlock(CloudProvider.GROQ, s, "Gratis: ongeveer 8 uur audio per dag (Whisper).") {
+                    GroqClient.checkKey(it)
                 }
-                check?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-                Spacer(Modifier.height(4.dp))
-                Text("Groq-model", fontWeight = FontWeight.Bold)
-                Choice("whisper-large-v3 (nauwkeurigst, aanbevolen)", s.groqModel == "whisper-large-v3") {
-                    Settings.update { it.copy(groqModel = "whisper-large-v3") }
+                Column(Modifier.padding(start = 48.dp)) {
+                    Text("Groq-model", fontWeight = FontWeight.Bold)
+                    Choice("whisper-large-v3 (nauwkeurigst, aanbevolen)", s.groqModel == "whisper-large-v3") {
+                        Settings.update { it.copy(groqModel = "whisper-large-v3") }
+                    }
+                    Choice("whisper-large-v3-turbo (sneller, iets minder nauwkeurig)", s.groqModel == "whisper-large-v3-turbo") {
+                        Settings.update { it.copy(groqModel = "whisper-large-v3-turbo") }
+                    }
                 }
-                Choice("whisper-large-v3-turbo (sneller, iets minder nauwkeurig)", s.groqModel == "whisper-large-v3-turbo") {
-                    Settings.update { it.copy(groqModel = "whisper-large-v3-turbo") }
-                }
+                ProviderBlock(
+                    CloudProvider.DEEPGRAM, s,
+                    "Nova-3 met een eigen Nederlands model. Gratis startegoed, daarna betaald per minuut " +
+                        "(ca. \$0,26 per uur audio).",
+                ) { DeepgramClient.checkKey(it) }
+                ProviderBlock(
+                    CloudProvider.VOXTRAL, s,
+                    "Mistral (Frans bedrijf). Betaald per minuut (ca. \$0,20 per uur audio). Herkent de taal zelf; " +
+                        "vaktermen werken voor Nederlands nog experimenteel.",
+                ) { VoxtralClient.checkKey(it) }
             }
 
             Section("Welke engine?") {
@@ -141,7 +129,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Choice(m.label, s.engine == m) { Settings.update { it.copy(engine = m) } }
                 }
                 Text(
-                    "Bij \"Groq, anders offline\" valt de app automatisch terug op het offline model als er geen internet is.",
+                    "Bij \"Online, anders offline\" valt de app automatisch terug op het offline model als er geen " +
+                        "internet is of de online dienst niet werkt.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -216,7 +205,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "Helpt Whisper bij de spelling. Kort houden: maximaal 400 tekens.",
+                    "Helpt bij de spelling. Scheid termen met komma's; Deepgram en Voxtral gebruiken ze als losse " +
+                        "termen. Kort houden: maximaal 400 tekens.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -233,11 +223,60 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             val info = remember { runCatching { WhisperLib.variant }.getOrDefault("niet geladen") }
+            val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() }
             Text(
-                "CollegeWhispr 1.0 · gebaseerd op OpenWhispr en whisper.cpp · engine: $info",
+                "CollegeWhispr ${version ?: ""} · gebaseerd op OpenWhispr en whisper.cpp · engine: $info",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/** Radio button to use [p], with its key field, a link to create a key and a test button. */
+@Composable
+private fun ProviderBlock(p: CloudProvider, s: SettingsState, description: String, check: (String) -> String?) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var key by remember { mutableStateOf(s.keyFor(p)) }
+    var show by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().clickable { Settings.update { it.copy(cloud = p) } },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = s.cloud == p, onClick = { Settings.update { it.copy(cloud = p) } })
+            Column(Modifier.weight(1f)) {
+                Text(p.label, fontWeight = FontWeight.Bold)
+                Text(description, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        Column(Modifier.padding(start = 48.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedTextField(
+                value = key,
+                onValueChange = { key = it.trim(); Settings.update { st -> st.withKey(p, key) }; result = null },
+                label = { Text("${p.label} API-sleutel") },
+                singleLine = true,
+                visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { show = !show }) {
+                        Icon(if (show) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Tonen")
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(p.keysUrl))) }
+                }) { Text("Sleutel aanmaken") }
+                Button(enabled = key.isNotBlank(), onClick = {
+                    result = "Bezig met controleren…"
+                    scope.launch { result = withContext(Dispatchers.IO) { check(key) } ?: "Sleutel werkt" }
+                }) { Text("Testen") }
+            }
+            result?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         }
     }
 }

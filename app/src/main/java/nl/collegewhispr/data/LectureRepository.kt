@@ -104,6 +104,34 @@ object LectureRepository {
     fun segments(id: String): List<Segment> =
         loadChunks(id)?.filter { it.done }?.flatMap { it.segments } ?: emptyList()
 
+    // --- earlier transcripts, kept to compare engines ---
+
+    private fun versionsDir(id: String) = File(dir(id), "versions")
+
+    /** Before a re-run overwrites it, keeps a finished transcript under the name of its engine(s). */
+    fun archiveTranscript(id: String) {
+        val l = get(id) ?: return
+        val src = chunksFile(id)
+        if (l.status != LectureStatus.DONE || !src.exists()) return
+        val name = (l.engines ?: "Eerdere versie").replace(Regex("[^\\p{L}\\p{N} ()+._-]"), "_").take(80)
+        versionsDir(id).mkdirs()
+        src.copyTo(File(versionsDir(id), "$name.json"), overwrite = true)
+    }
+
+    /** Names of the kept transcripts, oldest first. */
+    fun versions(id: String): List<String> =
+        versionsDir(id).listFiles { f -> f.name.endsWith(".json") }
+            ?.sortedBy { it.lastModified() }?.map { it.nameWithoutExtension } ?: emptyList()
+
+    fun versionSegments(id: String, name: String): List<Segment> = runCatching {
+        val arr = JSONArray(File(versionsDir(id), "$name.json").readText())
+        (0 until arr.length()).map { Chunk.fromJson(arr.getJSONObject(it)) }.filter { it.done }.flatMap { it.segments }
+    }.getOrDefault(emptyList())
+
+    fun deleteVersion(id: String, name: String) {
+        File(versionsDir(id), "$name.json").delete()
+    }
+
     /** Recordings cut off by a crash or a killed app: finalise the WAV so nothing is lost. */
     private fun repairInterrupted() {
         _lectures.value.filter {

@@ -33,17 +33,24 @@ import nl.collegewhispr.audio.Dsp
 import nl.collegewhispr.audio.SAMPLE_RATE
 import nl.collegewhispr.audio.Wav
 import nl.collegewhispr.data.Chunk
+import nl.collegewhispr.data.CloudProvider
 import nl.collegewhispr.data.EngineMode
 import nl.collegewhispr.data.LectureRepository
 import nl.collegewhispr.data.LectureStatus
 import nl.collegewhispr.data.Segment
 import nl.collegewhispr.data.Settings
+import nl.collegewhispr.data.SettingsState
+import nl.collegewhispr.transcribe.DeepgramClient
 import nl.collegewhispr.transcribe.GroqClient
-import nl.collegewhispr.transcribe.GroqException
+import nl.collegewhispr.transcribe.SttException
+import nl.collegewhispr.transcribe.VoxtralClient
 import nl.collegewhispr.ui.MainActivity
 import nl.collegewhispr.whisper.ModelManager
 import nl.collegewhispr.whisper.WhisperLib
 import java.io.IOException
+
+/** A queued lecture, optionally with the engine mode and online service to use instead of the settings. */
+private data class Request(val id: String, val engine: EngineMode?, val provider: CloudProvider?)
 
 data class TranscriptionState(
     val lectureId: String? = null,
@@ -62,18 +69,28 @@ class TranscriptionService : Service() {
         private const val EXTRA_ID = "id"
         private const val EXTRA_RESET = "reset"
         private const val EXTRA_ENGINE = "engine"
+        private const val EXTRA_PROVIDER = "provider"
         private const val NOTIF_ID = 2
         private const val STOPPED = "Gestopt. Tik op Transcriberen om verder te gaan."
 
         private val _state = MutableStateFlow(TranscriptionState())
         val state: StateFlow<TranscriptionState> get() = _state
 
-        fun enqueue(ctx: Context, id: String, reset: Boolean = false, engine: EngineMode? = null) {
+        fun enqueue(
+            ctx: Context, id: String, reset: Boolean = false,
+            engine: EngineMode? = null, provider: CloudProvider? = null,
+        ) {
             val i = Intent(ctx, TranscriptionService::class.java)
                 .setAction(ACTION_ENQUEUE).putExtra(EXTRA_ID, id).putExtra(EXTRA_RESET, reset)
             engine?.let { i.putExtra(EXTRA_ENGINE, it.name) }
-            if (reset) LectureRepository.clearChunks(id)
-            LectureRepository.update(id) { it.copy(status = LectureStatus.QUEUED, message = null) }
+            provider?.let { i.putExtra(EXTRA_PROVIDER, it.name) }
+            if (reset) {
+                LectureRepository.archiveTranscript(id) // keep the old one to compare with
+                LectureRepository.clearChunks(id)
+            }
+            LectureRepository.update(id) {
+                it.copy(status = LectureStatus.QUEUED, message = null, engines = if (reset) null else it.engines)
+            }
             try {
                 ContextCompat.startForegroundService(ctx, i)
             } catch (e: Exception) {
@@ -97,7 +114,7 @@ class TranscriptionService : Service() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val queue = ArrayDeque<Pair<String, EngineMode?>>()
+    private val queue = ArrayDeque<Request>()
     private var worker: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     /** Lecture being transcribed now, and its job (a child of [worker], so it can be stopped alone). */
@@ -111,17 +128,19 @@ class TranscriptionService : Service() {
                 goForeground("Transcriptie voorbereiden…", 0f)
                 val id = intent.getStringExtra(EXTRA_ID) ?: return START_NOT_STICKY
                 val eng = intent.getStringExtra(EXTRA_ENGINE)?.let { runCatching { EngineMode.valueOf(it) }.getOrNull() }
+                val provider = intent.getStringExtra(EXTRA_PROVIDER)
+                    ?.let { runCatching { CloudProvider.valueOf(it) }.getOrNull() }
                 synchronized(queue) {
-                    if (queue.none { it.first == id } && current?.first != id) queue.addLast(id to eng)
+                    if (queue.none { it.id == id } && current?.first != id) queue.addLast(Request(id, eng, provider))
                 }
                 startWorker()
             }
             ACTION_CANCEL -> {
                 val id = intent.getStringExtra(EXTRA_ID)
                 val removed = synchronized(queue) {
-                    queue.filter { id == null || it.first == id }.also { r -> queue.removeAll(r) }
+                    queue.filter { id == null || it.id == id }.also { r -> queue.removeAll(r) }
                 }
-                removed.forEach { markStopped(it.first) }
+                removed.forEach { markStopped(it.id) }
                 val running = current
                 if (id == null) {
                     runCatching { WhisperLib.requestAbort() }
@@ -177,24 +196,24 @@ class TranscriptionService : Service() {
                 while (true) {
                     val next = synchronized(queue) { queue.removeFirstOrNull() } ?: break
                     val engine = local ?: LocalEngine(this@TranscriptionService).also { local = it }
-                    _state.value = TranscriptionState(next.first)
+                    _state.value = TranscriptionState(next.id)
                     // LAZY: [current] must be set before the job can run, so Stoppen always finds it
                     val job = launch(start = CoroutineStart.LAZY) {
                         try {
-                            process(next.first, next.second, engine)
+                            process(next, engine)
                         } catch (e: kotlinx.coroutines.CancellationException) {
-                            LectureRepository.update(next.first) {
+                            LectureRepository.update(next.id) {
                                 it.copy(status = LectureStatus.RECORDED, message = STOPPED)
                             }
                             throw e
                         } catch (e: Exception) {
-                            Log.e(TAG, "Fout bij ${next.first}", e)
-                            LectureRepository.update(next.first) {
+                            Log.e(TAG, "Fout bij ${next.id}", e)
+                            LectureRepository.update(next.id) {
                                 it.copy(status = LectureStatus.ERROR, message = e.message ?: e.javaClass.simpleName)
                             }
                         }
                     }
-                    current = next.first to job
+                    current = next.id to job
                     job.join()
                     current = null
                 }
@@ -215,7 +234,8 @@ class TranscriptionService : Service() {
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
-    private suspend fun process(id: String, override: EngineMode?, local: LocalEngine) {
+    private suspend fun process(req: Request, local: LocalEngine) {
+        val id = req.id
         val lecture = LectureRepository.get(id) ?: return
         ModelManager.poll(this) // install an offline model whose download finished in the background
         val file = LectureRepository.audio(id)
@@ -228,9 +248,16 @@ class TranscriptionService : Service() {
         }.map { Chunk(it.first, it.last + 1) }.also { LectureRepository.saveChunks(id, it) }
 
         val settings = Settings.current
-        val mode = override ?: settings.engine
+        val mode = req.engine ?: settings.engine
+        val provider = req.provider ?: settings.cloud
+        val cloudKey = settings.keyFor(provider)
+        val cloudLabel = when (provider) {
+            CloudProvider.GROQ -> "Groq (${settings.groqModel})"
+            CloudProvider.DEEPGRAM -> "Deepgram Nova-3"
+            CloudProvider.VOXTRAL -> "Voxtral"
+        }
         val enginesUsed = chunks.mapNotNull { it.engine }.toMutableSet()
-        var groqBlocked: String? = null
+        var cloudBlocked: String? = null
         var prevTail = chunks.lastOrNull { it.done }?.segments?.joinToString(" ") { it.text }?.takeLast(200) ?: ""
 
         LectureRepository.update(id) {
@@ -257,25 +284,25 @@ class TranscriptionService : Service() {
             var usedEngine = ""
             var reason: String? = null
 
-            val canGroq = mode != EngineMode.OFFLINE_ONLY && settings.groqKey.isNotBlank() && groqBlocked == null
-            if (canGroq && online()) {
-                progress(0.05f, "Groq")
-                val r = tryGroq(settings.groqKey, settings.groqModel, samples, settings.language, prompt,
-                    allowLongWait = mode == EngineMode.GROQ_ONLY || !local.available())
+            val canCloud = mode != EngineMode.OFFLINE_ONLY && cloudKey.isNotBlank() && cloudBlocked == null
+            if (canCloud && online()) {
+                progress(0.05f, provider.label)
+                val r = tryCloud(provider, settings, cloudKey, samples, prompt,
+                    allowLongWait = mode == EngineMode.ONLINE_ONLY || !local.available())
                 when {
-                    r.segments != null -> { result = r.segments; usedEngine = "Groq" }
-                    r.fatal -> { groqBlocked = r.message; reason = r.message }
+                    r.segments != null -> { result = r.segments; usedEngine = cloudLabel }
+                    r.fatal -> { cloudBlocked = r.message; reason = r.message }
                     else -> reason = r.message
                 }
             } else if (mode != EngineMode.OFFLINE_ONLY) {
                 reason = when {
-                    settings.groqKey.isBlank() -> "Geen Groq API-sleutel ingesteld"
-                    groqBlocked != null -> groqBlocked
+                    cloudKey.isBlank() -> "Geen ${provider.label} API-sleutel ingesteld"
+                    cloudBlocked != null -> cloudBlocked
                     else -> "Geen internetverbinding"
                 }
             }
 
-            if (result == null && mode != EngineMode.GROQ_ONLY) {
+            if (result == null && mode != EngineMode.ONLINE_ONLY) {
                 if (local.available()) {
                     usedEngine = "Offline (${local.modelLabel()})"
                     progress(0f, usedEngine)
@@ -312,40 +339,48 @@ class TranscriptionService : Service() {
 
     private suspend fun coroutineContextCheck() = kotlin.coroutines.coroutineContext.ensureActive()
 
-    private class GroqResult(val segments: List<Segment>?, val fatal: Boolean = false, val message: String? = null)
+    private class CloudResult(val segments: List<Segment>?, val fatal: Boolean = false, val message: String? = null)
 
-    private suspend fun tryGroq(key: String, model: String, samples: ShortArray, lang: String, prompt: String,
-                                allowLongWait: Boolean): GroqResult {
+    /** One chunk through the chosen online service, with retries; [prompt] is Groq's, the others get the terms list. */
+    private suspend fun tryCloud(provider: CloudProvider, s: SettingsState, key: String, samples: ShortArray,
+                                 prompt: String, allowLongWait: Boolean): CloudResult {
         val wav = Wav.wavBytes(samples)
+        val name = provider.label
         var lastMsg = ""
-        var p = prompt
+        var hints = true
         for (attempt in 1..4) {
             try {
-                return GroqResult(GroqClient.transcribe(key, model, wav, lang, p))
-            } catch (e: GroqException) {
-                lastMsg = "Groq: ${e.message}"
+                val segments = when (provider) {
+                    CloudProvider.GROQ -> GroqClient.transcribe(key, s.groqModel, wav, s.language, if (hints) prompt else "")
+                    CloudProvider.DEEPGRAM -> DeepgramClient.transcribe(key, wav, s.language, if (hints) Settings.terms() else emptyList())
+                    CloudProvider.VOXTRAL -> VoxtralClient.transcribe(key, wav, if (hints) Settings.terms() else emptyList())
+                }
+                return CloudResult(segments)
+            } catch (e: SttException) {
+                lastMsg = "$name: ${e.message}"
                 when (e.code) {
-                    401, 403 -> return GroqResult(null, fatal = true, message = "Groq API-sleutel ongeldig of geweigerd")
+                    401, 403 -> return CloudResult(null, fatal = true, message = "$name API-sleutel ongeldig of geweigerd")
+                    402 -> return CloudResult(null, fatal = true, message = "$name: tegoed op ($lastMsg)")
                     429 -> {
                         val wait = e.retryAfterS ?: (30L * attempt)
-                        if (wait > 120 && !allowLongWait) return GroqResult(null, message = "Groq-limiet bereikt")
+                        if (wait > 120 && !allowLongWait) return CloudResult(null, message = "$name-limiet bereikt")
                         delay(minOf(wait, 20 * 60L) * 1000)
                     }
-                    400 -> {
-                        // e.g. prompt too long: retry once without it
-                        if (p.isEmpty()) return GroqResult(null, fatal = true, message = lastMsg)
-                        p = ""
+                    400, 422 -> {
+                        // e.g. prompt too long or a term the service rejects: retry once without hints
+                        if (!hints) return CloudResult(null, fatal = true, message = lastMsg)
+                        hints = false
                     }
-                    404, 413 -> return GroqResult(null, fatal = true, message = lastMsg)
+                    404, 413 -> return CloudResult(null, fatal = true, message = lastMsg)
                     else -> delay(5_000L * attempt)
                 }
             } catch (e: IOException) {
                 lastMsg = "Netwerkfout: ${e.message}"
-                if (!online()) return GroqResult(null, message = "Geen internetverbinding")
+                if (!online()) return CloudResult(null, message = "Geen internetverbinding")
                 delay(5_000L * attempt)
             }
         }
-        return GroqResult(null, message = lastMsg)
+        return CloudResult(null, message = lastMsg)
     }
 
     private fun notifyDone(id: String, title: String) {

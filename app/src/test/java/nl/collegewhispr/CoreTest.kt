@@ -6,8 +6,11 @@ import nl.collegewhispr.audio.Dsp
 import nl.collegewhispr.audio.SAMPLE_RATE
 import nl.collegewhispr.audio.Wav
 import nl.collegewhispr.data.Segment
-import nl.collegewhispr.transcribe.GroqClient
+import nl.collegewhispr.data.Settings
+import nl.collegewhispr.transcribe.DeepgramClient
+import nl.collegewhispr.transcribe.Http
 import nl.collegewhispr.transcribe.TextFormat
+import nl.collegewhispr.transcribe.VerboseJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -102,7 +105,7 @@ class CoreTest {
           {"start":30.0,"end":34.0,"text":" ja ja ja ja ja ja ja ja ja ja ja ja","no_speech_prob":0.1,"avg_logprob":-0.5,"compression_ratio":4.0},
           {"start":34.0,"end":38.5,"text":" Vandaag behandelen we hoofdstuk drie.","no_speech_prob":0.02,"avg_logprob":-0.3,"compression_ratio":1.4}
         ]}"""
-        val segs = GroqClient.parse(body)
+        val segs = VerboseJson.parse(body)
         assertEquals(listOf("Goedemorgen allemaal.", "Vandaag behandelen we hoofdstuk drie."), segs.map { it.text })
         assertEquals(34000L, segs[1].startMs)
     }
@@ -124,5 +127,50 @@ class CoreTest {
         val txt = TextFormat.plainText("Titel", "datum", paras, true)
         assertTrue(txt.contains("[00:15] Dan het tweede onderwerp."))
         assertEquals("1:01:01", TextFormat.time(3661_000))
+    }
+
+    @Test
+    fun deepgramParseUsesUtterances() {
+        val body = """{"metadata":{},"results":{
+          "channels":[{"alternatives":[{"transcript":"Goedemorgen allemaal. Vandaag hoofdstuk drie.","confidence":0.98}]}],
+          "utterances":[
+            {"start":0.32,"end":2.1,"transcript":"Goedemorgen allemaal.","speaker":0,"channel":0},
+            {"start":3.0,"end":5.75,"transcript":" Vandaag hoofdstuk drie. ","speaker":0,"channel":0},
+            {"start":6.0,"end":6.5,"transcript":"","speaker":0,"channel":0}
+          ]}}"""
+        val segs = DeepgramClient.parse(body)
+        assertEquals(listOf("Goedemorgen allemaal.", "Vandaag hoofdstuk drie."), segs.map { it.text })
+        assertEquals(320L, segs[0].startMs)
+        assertEquals(5750L, segs[1].endMs)
+        // without utterances, fall back to the whole transcript
+        val plain = """{"results":{"channels":[{"alternatives":[{"transcript":"Alleen tekst."}]}]}}"""
+        assertEquals(listOf("Alleen tekst."), DeepgramClient.parse(plain).map { it.text })
+    }
+
+    @Test
+    fun voxtralStyleSegmentsWithoutWhisperFields() {
+        // Mistral returns OpenAI-style segments without no_speech_prob and friends
+        val body = """{"model":"voxtral-mini-latest","text":"Welkom. Dit is college twee.","language":"nl",
+          "segments":[{"text":" Welkom.","start":0.0,"end":1.2},{"text":" Dit is college twee.","start":1.5,"end":3.4}]}"""
+        val segs = VerboseJson.parse(body)
+        assertEquals(listOf("Welkom.", "Dit is college twee."), segs.map { it.text })
+        assertEquals(1500L, segs[1].startMs)
+    }
+
+    @Test
+    fun errorMessagesFromAllServices() {
+        assertEquals("Invalid API Key", Http.errorMessage("""{"error":{"message":"Invalid API Key","type":"invalid_request_error"}}"""))
+        assertEquals("Invalid credentials.", Http.errorMessage("""{"err_code":"INVALID_AUTH","err_msg":"Invalid credentials.","request_id":"x"}"""))
+        assertEquals("Unauthorized", Http.errorMessage("""{"object":"error","message":"Unauthorized","type":"unauthorized"}"""))
+        assertEquals("Bad Gateway", Http.errorMessage("Bad Gateway"))
+    }
+
+    @Test
+    fun vocabularySplitsIntoTerms() {
+        assertEquals(
+            listOf("prof. Jansen", "dr. El Amrani", "Rawls", "casus Lindenbaum/Cohen"),
+            Settings.splitTerms("prof. Jansen, dr. El Amrani;Rawls\n\n casus Lindenbaum/Cohen , Rawls"),
+        )
+        assertTrue(Settings.splitTerms("  ").isEmpty())
     }
 }
