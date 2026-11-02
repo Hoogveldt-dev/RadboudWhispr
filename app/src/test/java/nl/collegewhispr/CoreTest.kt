@@ -58,7 +58,7 @@ class CoreTest {
     fun decimatorKeepsSpeechBandAndRemovesAliasing() {
         fun tone(freq: Double, rate: Int, n: Int) = ShortArray(n) { (sin(2 * PI * freq * it / rate) * 10000).toInt().toShort() }
         fun rms(s: ShortArray) = sqrt(s.drop(200).sumOf { it.toDouble() * it } / (s.size - 200))
-        for (rate in intArrayOf(48000, 44100)) {
+        for (rate in intArrayOf(48000, 44100, 32000)) {
             val d = Decimator(rate)
             val src = tone(1000.0, rate, rate * 2)
             // feed in uneven blocks like AudioRecord does

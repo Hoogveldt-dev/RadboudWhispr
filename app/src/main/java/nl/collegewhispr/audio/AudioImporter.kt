@@ -1,11 +1,14 @@
 package nl.collegewhispr.audio
 
 import android.content.Context
+import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -34,61 +37,67 @@ object AudioImporter {
             dec.configure(fmt, null, null, 0)
             dec.start()
 
-            var srcRate = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            var channels = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            var pcmFloat = false
-            var decimator = Decimator(srcRate)
+            val conv = Converter(fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE), fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT), false)
             var written = 0L
+            var lastReported = -1
             val info = MediaCodec.BufferInfo()
             var inputDone = false
             var outputDone = false
 
-            RandomAccessFile(out, "rw").use { raf ->
-                raf.setLength(0)
-                raf.write(Wav.header(0))
+            // Buffered: one write per decoded frame (~20 ms of audio) would mean hundreds of
+            // thousands of tiny file writes for a long lecture.
+            BufferedOutputStream(FileOutputStream(out), 1 shl 18).use { os ->
+                os.write(Wav.header(0))
                 while (!outputDone) {
-                    if (!inputDone) {
-                        val inIdx = dec.dequeueInputBuffer(10_000)
-                        if (inIdx >= 0) {
-                            val buf = dec.getInputBuffer(inIdx)!!
-                            val size = ex.readSampleData(buf, 0)
-                            if (size < 0) {
-                                dec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                inputDone = true
-                            } else {
-                                dec.queueInputBuffer(inIdx, 0, size, ex.sampleTime, 0)
-                                if (durationUs > 0) onProgress((ex.sampleTime.toFloat() / durationUs).coerceIn(0f, 1f))
-                                ex.advance()
-                            }
+                    // Keep the decoder fed: hand it every free input buffer instead of one
+                    // frame per round trip, so decoding runs ahead while we convert output.
+                    var progressed = false
+                    while (!inputDone) {
+                        val inIdx = dec.dequeueInputBuffer(0L)
+                        if (inIdx < 0) break
+                        val buf = dec.getInputBuffer(inIdx)!!
+                        val size = ex.readSampleData(buf, 0)
+                        if (size < 0) {
+                            dec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            dec.queueInputBuffer(inIdx, 0, size, ex.sampleTime, 0)
+                            ex.advance()
                         }
+                        progressed = true
                     }
-                    val outIdx = dec.dequeueOutputBuffer(info, 10_000)
-                    when {
-                        outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    // Drain everything that is ready; only wait when there was nothing to do.
+                    while (true) {
+                        val outIdx = dec.dequeueOutputBuffer(info, if (progressed) 0L else 5_000L)
+                        if (outIdx == MediaCodec.INFO_TRY_AGAIN_LATER) break
+                        progressed = true
+                        if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                             val of = dec.outputFormat
-                            srcRate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-                            channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                            pcmFloat = of.containsKey(MediaFormat.KEY_PCM_ENCODING) &&
-                                of.getInteger(MediaFormat.KEY_PCM_ENCODING) == android.media.AudioFormat.ENCODING_PCM_FLOAT
-                            decimator = Decimator(srcRate)
+                            conv.reset(
+                                of.getInteger(MediaFormat.KEY_SAMPLE_RATE),
+                                of.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
+                                of.containsKey(MediaFormat.KEY_PCM_ENCODING) &&
+                                    of.getInteger(MediaFormat.KEY_PCM_ENCODING) == AudioFormat.ENCODING_PCM_FLOAT,
+                            )
+                            continue
                         }
-                        outIdx >= 0 -> {
+                        if (outIdx < 0) continue // INFO_OUTPUT_BUFFERS_CHANGED on old devices
+                        if (info.size > 0) {
                             val ob = dec.getOutputBuffer(outIdx)!!
                             ob.position(info.offset); ob.limit(info.offset + info.size)
-                            val mono = toMono(ob.slice().order(ByteOrder.nativeOrder()), channels, pcmFloat)
-                            val res = decimator.process(mono)
-                            val bb = ByteBuffer.allocate(res.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-                            bb.asShortBuffer().put(res)
-                            raf.write(bb.array())
-                            written += res.size * 2
-                            dec.releaseOutputBuffer(outIdx, false)
-                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                            written += conv.convert(ob.slice().order(ByteOrder.nativeOrder()), os)
                         }
+                        dec.releaseOutputBuffer(outIdx, false)
+                        if (durationUs > 0) {
+                            // report in 0.5 % steps so the UI is not flooded with updates
+                            val pct = (info.presentationTimeUs * 200 / durationUs).toInt().coerceIn(0, 200)
+                            if (pct != lastReported) { lastReported = pct; onProgress(pct / 200f) }
+                        }
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) { outputDone = true; break }
                     }
                 }
-                raf.seek(0)
-                raf.write(Wav.header(written))
             }
+            RandomAccessFile(out, "rw").use { raf -> raf.seek(0); raf.write(Wav.header(written)) }
             written
         } finally {
             // a failed import must not leak the (limited) hardware decoder
@@ -99,23 +108,63 @@ object AudioImporter {
         return bytes / 2 * 1000 / SAMPLE_RATE
     }
 
-    private fun toMono(b: ByteBuffer, channels: Int, isFloat: Boolean): ShortArray {
-        return if (isFloat) {
-            val f = b.asFloatBuffer()
-            val frames = f.remaining() / channels
-            ShortArray(frames) { i ->
-                var s = 0f
-                for (c in 0 until channels) s += f.get(i * channels + c)
-                (s / channels * 32767f).toInt().coerceIn(-32768, 32767).toShort()
+    /** Turns decoder output into 16 kHz mono PCM16, reusing its buffers between frames. */
+    private class Converter(rate: Int, private var channels: Int, private var isFloat: Boolean) {
+        private var decimator = Decimator(rate)
+        private var mono = ShortArray(0)
+        private var raw = ShortArray(0)
+        private var rawF = FloatArray(0)
+        private var bytes = ByteArray(0)
+
+        fun reset(rate: Int, channels: Int, isFloat: Boolean) {
+            decimator = Decimator(rate)
+            this.channels = channels
+            this.isFloat = isFloat
+        }
+
+        /** Returns the number of bytes written. */
+        fun convert(b: ByteBuffer, os: java.io.OutputStream): Int {
+            val frames: Int
+            if (isFloat) {
+                val f = b.asFloatBuffer()
+                val n = f.remaining()
+                if (rawF.size < n) rawF = FloatArray(n)
+                f.get(rawF, 0, n)
+                frames = n / channels
+                if (mono.size < frames) mono = ShortArray(frames)
+                for (i in 0 until frames) {
+                    var s = 0f
+                    for (c in 0 until channels) s += rawF[i * channels + c]
+                    mono[i] = (s / channels * 32767f).toInt().coerceIn(-32768, 32767).toShort()
+                }
+            } else {
+                val sb = b.asShortBuffer()
+                val n = sb.remaining()
+                frames = n / channels
+                if (channels == 1) {
+                    if (mono.size < n) mono = ShortArray(n)
+                    sb.get(mono, 0, n)
+                } else {
+                    if (raw.size < n) raw = ShortArray(n)
+                    sb.get(raw, 0, n)
+                    if (mono.size < frames) mono = ShortArray(frames)
+                    for (i in 0 until frames) {
+                        var s = 0
+                        for (c in 0 until channels) s += raw[i * channels + c]
+                        mono[i] = (s / channels).toShort()
+                    }
+                }
             }
-        } else {
-            val sb = b.asShortBuffer()
-            val frames = sb.remaining() / channels
-            ShortArray(frames) { i ->
-                var s = 0
-                for (c in 0 until channels) s += sb.get(i * channels + c)
-                (s / channels).toShort()
+            val res = decimator.process(mono, frames)
+            val len = res.size * 2
+            if (bytes.size < len) bytes = ByteArray(len)
+            for (i in res.indices) {
+                val v = res[i].toInt()
+                bytes[2 * i] = v.toByte()
+                bytes[2 * i + 1] = (v shr 8).toByte()
             }
+            os.write(bytes, 0, len)
+            return len
         }
     }
 }
