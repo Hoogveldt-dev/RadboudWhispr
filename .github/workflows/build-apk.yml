@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths-ignore: ['**.md']  # documentation-only commits need no new APK
 
 permissions:
   contents: write
