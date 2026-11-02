@@ -28,7 +28,7 @@ repeated lines are filtered out.
 
 ## Setup on the tablet
 
-1. Install `CollegeWhispr-1.3.1.apk` (allow "install unknown apps" for your file manager/browser).
+1. Install `CollegeWhispr-1.3.2.apk` (allow "install unknown apps" for your file manager/browser).
 2. Open Instellingen:
    - Under *Online transcriptie*, paste a Deepgram API key (https://console.deepgram.com/, then
      API Keys) and tap *Testen*; it also shows the remaining credit when the key may read billing.
@@ -81,6 +81,7 @@ keyPassword=...
 | Path | Purpose |
 |---|---|
 | `service/RecordingService.kt` | microphone foreground service, WAV writing, pause/resume |
+| `service/ImportService.kt` | foreground service that converts an imported file, survives screen lock |
 | `service/TranscriptionService.kt` | queue, chunking, online service first then offline fallback, resume |
 | `transcribe/GroqClient.kt`, `DeepgramClient.kt`, `VoxtralClient.kt` | online transcription APIs |
 | `transcribe/CloudStt.kt` | shared HTTP, multipart and verbose_json parsing for those clients |

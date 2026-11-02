@@ -42,11 +42,11 @@ object LectureRepository {
 
     fun get(id: String): Lecture? = _lectures.value.firstOrNull { it.id == id }
 
-    fun newLecture(): Lecture {
+    fun newLecture(status: LectureStatus = LectureStatus.RECORDING): Lecture {
         val now = System.currentTimeMillis()
         val fmt = SimpleDateFormat("EEEE d MMMM, HH:mm", Locale("nl", "NL"))
         val title = "Hoorcollege " + fmt.format(Date(now))
-        val l = Lecture(UUID.randomUUID().toString(), title, now, status = LectureStatus.RECORDING)
+        val l = Lecture(UUID.randomUUID().toString(), title, now, status = status)
         dir(l.id).mkdirs()
         save(l)
         return l
@@ -140,9 +140,21 @@ object LectureRepository {
     /** Recordings cut off by a crash or a killed app: finalise the WAV so nothing is lost. */
     private fun repairInterrupted() {
         _lectures.value.filter {
-            it.status == LectureStatus.RECORDING || it.status == LectureStatus.TRANSCRIBING
+            it.status == LectureStatus.RECORDING || it.status == LectureStatus.TRANSCRIBING ||
+                it.status == LectureStatus.IMPORTING
         }.forEach { l ->
-            if (l.status == LectureStatus.RECORDING) {
+            if (l.status == LectureStatus.IMPORTING) {
+                // Only part of the file was converted; the original is still on the device.
+                val a = audio(l.id)
+                if (a.exists() && a.length() > Wav.HEADER_SIZE) {
+                    runCatching { Wav.fixHeader(a) }
+                    val dur = runCatching { Wav.info(a).durationMs }.getOrDefault(0L)
+                    save(l.copy(status = LectureStatus.RECORDED, durationMs = dur,
+                        message = "Importeren werd onderbroken; alleen het begin is omgezet. Importeer het bestand opnieuw."))
+                } else {
+                    delete(l.id)
+                }
+            } else if (l.status == LectureStatus.RECORDING) {
                 val a = audio(l.id)
                 if (a.exists() && a.length() > Wav.HEADER_SIZE) {
                     runCatching { Wav.fixHeader(a) }

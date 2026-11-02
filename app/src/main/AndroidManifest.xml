@@ -45,6 +45,11 @@
             android:foregroundServiceType="microphone" />
 
         <service
+            android:name=".service.ImportService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <service
             android:name=".service.TranscriptionService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />

@@ -6,24 +6,20 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import nl.collegewhispr.audio.AudioImporter
 import nl.collegewhispr.data.LectureRepository
 import nl.collegewhispr.data.LectureStatus
-import nl.collegewhispr.data.Settings
+import nl.collegewhispr.service.ImportService
 import nl.collegewhispr.service.RecordingService
 import nl.collegewhispr.service.TranscriptionService
 import nl.collegewhispr.whisper.ModelManager
@@ -37,8 +33,6 @@ sealed interface Screen {
 class MainActivity : ComponentActivity() {
 
     private var screen by mutableStateOf<Screen>(Screen.Home)
-    var importProgress by mutableStateOf<Float?>(null)
-        private set
     var importError by mutableStateOf<String?>(null)
 
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
@@ -56,6 +50,10 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
         setContent {
             AppTheme {
+                val imported by ImportService.state.collectAsState()
+                LaunchedEffect(imported.finishedId) {
+                    imported.finishedId?.let { screen = Screen.Detail(it); ImportService.consumeFinished() }
+                }
                 BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
                 when (val s = screen) {
                     Screen.Home -> HomeScreen(
@@ -109,38 +107,5 @@ class MainActivity : ComponentActivity() {
 
     fun pickAudioFile() = pickAudio.launch(arrayOf("audio/*", "video/*"))
 
-    private fun displayName(uri: Uri): String? = runCatching {
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-            if (c.moveToFirst()) c.getString(0) else null
-        }
-    }.getOrNull()
-
-    private fun importAudio(uri: Uri) {
-        if (importProgress != null) return
-        importProgress = 0f
-        lifecycleScope.launch {
-            val lecture = LectureRepository.newLecture().let { l ->
-                val name = displayName(uri)?.substringBeforeLast('.')
-                if (name != null) l.copy(title = name).also { LectureRepository.save(it) } else l
-            }
-            try {
-                val ms = withContext(Dispatchers.IO) {
-                    AudioImporter.import(this@MainActivity, uri, LectureRepository.audio(lecture.id)) { p ->
-                        runOnUiThread { importProgress = p }
-                    }
-                }
-                val auto = Settings.current.autoTranscribe
-                LectureRepository.update(lecture.id) {
-                    it.copy(durationMs = ms, status = if (auto) LectureStatus.QUEUED else LectureStatus.RECORDED)
-                }
-                if (auto) TranscriptionService.enqueue(this@MainActivity, lecture.id)
-                screen = Screen.Detail(lecture.id)
-            } catch (e: Exception) {
-                LectureRepository.delete(lecture.id)
-                importError = "Importeren mislukt: ${e.message}"
-            } finally {
-                importProgress = null
-            }
-        }
-    }
+    private fun importAudio(uri: Uri) = ImportService.start(this, uri)
 }

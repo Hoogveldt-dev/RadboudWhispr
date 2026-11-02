@@ -407,7 +407,7 @@ fun StatusLine(l: Lecture, chunkInfo: Pair<Int, Int>?) {
     val ios = LocalIos.current
     val color = when (l.status) {
         LectureStatus.DONE -> ios.green
-        LectureStatus.TRANSCRIBING, LectureStatus.QUEUED -> ios.accent
+        LectureStatus.TRANSCRIBING, LectureStatus.QUEUED, LectureStatus.IMPORTING -> ios.accent
         LectureStatus.WAITING -> ios.orange
         LectureStatus.ERROR, LectureStatus.RECORDING -> ios.red
         LectureStatus.RECORDED -> ios.secondaryLabel

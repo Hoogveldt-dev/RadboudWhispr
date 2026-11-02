@@ -16,7 +16,11 @@ import java.nio.ByteOrder
 /** Decodes any audio file Android supports (m4a, mp3, ogg, wav, ...) to 16 kHz mono PCM16 WAV. */
 object AudioImporter {
 
-    fun import(ctx: Context, uri: Uri, out: File, onProgress: (Float) -> Unit = {}): Long {
+    fun import(
+        ctx: Context, uri: Uri, out: File,
+        shouldStop: () -> Boolean = { false },
+        onProgress: (Float) -> Unit = {},
+    ): Long {
         val ex = MediaExtractor()
         var codec: MediaCodec? = null
         val bytes = try {
@@ -49,6 +53,7 @@ object AudioImporter {
             BufferedOutputStream(FileOutputStream(out), 1 shl 18).use { os ->
                 os.write(Wav.header(0))
                 while (!outputDone) {
+                    check(!shouldStop()) { "Importeren gestopt" }
                     // Keep the decoder fed: hand it every free input buffer instead of one
                     // frame per round trip, so decoding runs ahead while we convert output.
                     var progressed = false

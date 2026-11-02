@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import nl.collegewhispr.data.LectureRepository
 import nl.collegewhispr.data.Settings
+import nl.collegewhispr.service.ImportService
 import nl.collegewhispr.service.RecorderState
 import nl.collegewhispr.service.RecordingService
 import nl.collegewhispr.service.TranscriptionService
@@ -65,6 +66,7 @@ fun HomeScreen(activity: MainActivity, onOpen: (String) -> Unit, onSettings: () 
     val lectures by LectureRepository.lectures.collectAsState()
     val rec by RecordingService.state.collectAsState()
     val tx by TranscriptionService.state.collectAsState()
+    val imp by ImportService.state.collectAsState()
     val settings by Settings.state.collectAsState()
     val installed by ModelManager.installed.collectAsState()
     val needsSetup = settings.keyFor(settings.cloud).isBlank() && ModelManager.models.none { it.id in installed }
@@ -144,22 +146,29 @@ fun HomeScreen(activity: MainActivity, onOpen: (String) -> Unit, onSettings: () 
         }
     }
 
-    activity.importProgress?.let { p ->
+    if (imp.lectureId != null) {
         AlertDialog(
             onDismissRequest = {},
             confirmButton = {},
             title = { Text("Audio importeren", style = IosType.headline, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
             text = {
                 Column {
-                    Text("Bestand wordt omgezet…", style = IosType.footnote, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "Bestand wordt omgezet… ${(imp.progress * 100).toInt()}%\nDit gaat door als je het scherm vergrendelt of een andere app opent.",
+                        style = IosType.footnote, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+                    )
                     Spacer(Modifier.height(14.dp))
-                    ThinProgress(p)
+                    ThinProgress(imp.progress)
                 }
             },
             shape = RoundedCornerShape(14.dp),
             containerColor = ios.card,
             tonalElevation = 0.dp,
         )
+    }
+    imp.error?.let { err ->
+        IosAlert(title = "Importeren", message = err, confirm = "OK", dismiss = null,
+            onConfirm = { ImportService.clearError() }, onDismiss = { ImportService.clearError() })
     }
     activity.importError?.let { err ->
         IosAlert(title = "Let op", message = err, confirm = "OK", dismiss = null,

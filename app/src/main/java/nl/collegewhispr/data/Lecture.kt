@@ -5,6 +5,7 @@ import org.json.JSONObject
 
 enum class LectureStatus(val label: String) {
     RECORDING("Opname loopt"),
+    IMPORTING("Wordt geïmporteerd"),
     RECORDED("Opgenomen"),
     QUEUED("In de wachtrij"),
     TRANSCRIBING("Bezig met transcriberen"),
