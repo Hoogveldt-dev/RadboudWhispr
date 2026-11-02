@@ -13,7 +13,7 @@ Claude cloud sessions cannot reach Google Maven or the Android SDK (`dl.google.c
 github.com works. So GitHub Actions builds, and the APK is signed locally:
 
 1. Bump `versionCode` (+1) and `versionName` in `app/build.gradle.kts`, and the APK name in the
-   README setup steps. Current: versionCode 5, versionName 1.3.0.
+   README setup steps. Current: versionCode 6, versionName 1.3.1.
 2. Push to `main`. `.github/workflows/build-apk.yml` runs on every push to `main` (and on manual
    dispatch): unit tests, `assembleRelease` without signing, then force-pushes
    `app-release-unsigned.apk` and the SDK's `apksigner.jar` to the `apk-build` branch with the
