@@ -28,7 +28,7 @@ repeated lines are filtered out.
 
 ## Setup on the tablet
 
-1. Install `CollegeWhispr-1.3.2.apk` (allow "install unknown apps" for your file manager/browser).
+1. Install `CollegeWhispr-1.3.3.apk` (allow "install unknown apps" for your file manager/browser).
 2. Open Instellingen:
    - Under *Online transcriptie*, paste a Deepgram API key (https://console.deepgram.com/, then
      API Keys) and tap *Testen*; it also shows the remaining credit when the key may read billing.
