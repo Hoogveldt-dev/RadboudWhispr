@@ -24,7 +24,7 @@ github.com works. So GitHub Actions builds, and the APK is signed locally:
    (never commit them; `.gitignore` excludes them). Ask the user to upload them, then:
 
    ```bash
-   git clone -q --depth 1 -b apk-build https://github.com/Woofer-dev/WooferWhispr apk-build
+   git clone -q --depth 1 -b apk-build https://github.com/Hoogveldt-dev/WooferWhispr apk-build
    java -jar apk-build/apksigner.jar sign --ks release.jks --ks-key-alias collegewhispr \
      --ks-pass pass:<storePassword> --key-pass pass:<keyPassword> \
      --out CollegeWhispr-<version>.apk apk-build/app-release-unsigned.apk
